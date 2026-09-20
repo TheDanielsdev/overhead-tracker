@@ -1,0 +1,1797 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Overhead — Track any flight, live</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link
+    href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=Manrope:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500&display=swap"
+    rel="stylesheet">
+  <style>
+    :root {
+      --paper: #FBF8F4;
+      --card: #FFFFFF;
+      --ink: #1B2333;
+      --ink-soft: #59607A;
+      --ink-faint: #9AA1B5;
+      --line: #E7E2D8;
+      --sunset: #FF6A4D;
+      --sunset-deep: #E2502F;
+      --sky: #3D63DD;
+      --sky-soft: #EAF0FF;
+      --good: #1FA97A;
+      --good-soft: #E7F7F0;
+      --amber: #E8A93C;
+      --amber-soft: #FBF3E1;
+      --alert: #E4483A;
+      --radar-bg: #0E1420;
+      --radar-line: #1E2A3D;
+      --radar-green: #3DFF9A;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html,
+    body {
+      margin: 0;
+      padding: 0;
+      background: var(--paper);
+      color: var(--ink);
+      min-height: 100%;
+    }
+
+    body {
+      font-family: 'Manrope', sans-serif;
+      display: flex;
+      flex-direction: column;
+      min-height: 100vh;
+    }
+
+    h1,
+    h2,
+    h3 {
+      font-family: 'Fraunces', serif;
+      margin: 0;
+      font-weight: 500;
+    }
+
+    p {
+      margin: 0;
+    }
+
+    button {
+      font-family: inherit;
+      cursor: pointer;
+    }
+
+    a {
+      color: inherit;
+    }
+
+    /* ---------- top bar ---------- */
+    header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 18px 28px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .brand-mark {
+      width: 30px;
+      height: 30px;
+      border-radius: 50%;
+      background: var(--sunset);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 15px;
+      transform: rotate(-15deg);
+    }
+
+    .brand h1 {
+      font-size: 21px;
+      color: var(--ink);
+    }
+
+    nav.tabs {
+      display: flex;
+      gap: 4px;
+      background: var(--card);
+      border: 1px solid var(--line);
+      padding: 3px;
+      border-radius: 999px;
+    }
+
+    nav.tabs button {
+      border: none;
+      background: transparent;
+      padding: 8px 16px;
+      border-radius: 999px;
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--ink-soft);
+    }
+
+    nav.tabs button.active {
+      background: var(--ink);
+      color: #fff;
+    }
+
+    main {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .view {
+      display: none;
+    }
+
+    .view.active {
+      display: block;
+    }
+
+    /* ---------- hero / search ---------- */
+    .hero {
+      padding: 56px 28px 28px;
+      text-align: center;
+      max-width: 720px;
+      margin: 0 auto;
+      width: 100%;
+    }
+
+    .hero h2 {
+      font-size: clamp(28px, 4vw, 42px);
+      line-height: 1.15;
+      color: var(--ink);
+    }
+
+    .hero h2 em {
+      font-style: italic;
+      color: var(--sunset-deep);
+    }
+
+    .hero .sub {
+      margin-top: 10px;
+      color: var(--ink-soft);
+      font-size: 15px;
+    }
+
+    .search-box {
+      margin-top: 28px;
+      display: flex;
+      gap: 8px;
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      padding: 8px;
+      box-shadow: 0 10px 30px -18px rgba(27, 35, 51, 0.35);
+    }
+
+    .search-box input {
+      flex: 1;
+      border: none;
+      outline: none;
+      padding: 12px 14px;
+      font-size: 16px;
+      font-family: 'Manrope', sans-serif;
+      background: transparent;
+      color: var(--ink);
+    }
+
+    .search-box input::placeholder {
+      color: var(--ink-faint);
+    }
+
+    .search-box button {
+      background: var(--sunset);
+      color: #fff;
+      border: none;
+      padding: 0 22px;
+      border-radius: 11px;
+      font-weight: 700;
+      font-size: 14px;
+      transition: .15s;
+    }
+
+    .search-box button:hover {
+      background: var(--sunset-deep);
+    }
+
+    .search-box button:disabled {
+      background: var(--ink-faint);
+      cursor: default;
+    }
+
+    .search-hint {
+      margin-top: 10px;
+      font-size: 12.5px;
+      color: var(--ink-faint);
+    }
+
+    .chips {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      justify-content: center;
+      margin-top: 22px;
+    }
+
+    .chip {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 7px 14px;
+      font-size: 12.5px;
+      font-weight: 600;
+      color: var(--ink-soft);
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .chip:hover {
+      border-color: var(--sunset);
+      color: var(--sunset-deep);
+    }
+
+    .chip .dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--good);
+    }
+
+    /* ---------- flight card ---------- */
+    .result-wrap {
+      max-width: 720px;
+      margin: 0 auto;
+      width: 100%;
+      padding: 0 28px 40px;
+    }
+
+    .flight-card {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 22px;
+      padding: 28px;
+      margin-top: 8px;
+    }
+
+    .fc-top {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 16px;
+      flex-wrap: wrap;
+    }
+
+    .fc-airline {
+      font-size: 13px;
+      font-weight: 700;
+      color: var(--sunset-deep);
+      letter-spacing: .2px;
+    }
+
+    .fc-flightno {
+      font-size: 26px;
+      font-family: 'Fraunces', serif;
+      margin-top: 2px;
+    }
+
+    .fc-phase {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      background: var(--sky-soft);
+      color: var(--sky);
+      padding: 7px 13px;
+      border-radius: 999px;
+      font-size: 12.5px;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+
+    .fc-phase.ground {
+      background: #F1EFE9;
+      color: var(--ink-soft);
+    }
+
+    .fc-phase.alert {
+      background: #FDEAE8;
+      color: var(--alert);
+    }
+
+    .fc-phase.landed {
+      background: var(--good-soft);
+      color: var(--good);
+    }
+
+    .fc-phase.scheduled {
+      background: var(--amber-soft);
+      color: var(--amber);
+    }
+
+    .fc-phase .pulse {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: currentColor;
+      animation: pulse 1.6s infinite;
+    }
+
+    .fc-phase.landed .pulse,
+    .fc-phase.scheduled .pulse {
+      animation: none;
+    }
+
+    @keyframes pulse {
+
+      0%,
+      100% {
+        opacity: 1;
+      }
+
+      50% {
+        opacity: .3;
+      }
+    }
+
+    .fc-story {
+      margin-top: 20px;
+      font-size: 18px;
+      line-height: 1.55;
+      color: var(--ink);
+    }
+
+    .fc-story b {
+      font-weight: 700;
+    }
+
+    .fc-stats {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 14px;
+      margin-top: 24px;
+    }
+
+    .fc-stat {
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      padding: 14px 16px;
+    }
+
+    .fc-stat .label {
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: .6px;
+      color: var(--ink-faint);
+      font-weight: 700;
+    }
+
+    .fc-stat .val {
+      font-size: 19px;
+      margin-top: 4px;
+      font-family: 'Fraunces', serif;
+    }
+
+    .fc-mini-map {
+      margin-top: 22px;
+      border-radius: 16px;
+      overflow: hidden;
+      border: 1px solid var(--line);
+      background: var(--radar-bg);
+      height: 180px;
+      position: relative;
+    }
+
+    .fc-mini-map canvas {
+      display: block;
+      width: 100%;
+      height: 100%;
+    }
+
+    .fc-actions {
+      display: flex;
+      gap: 10px;
+      margin-top: 20px;
+      flex-wrap: wrap;
+    }
+
+    .fc-btn {
+      border: 1px solid var(--line);
+      background: var(--card);
+      padding: 10px 16px;
+      border-radius: 11px;
+      font-size: 13px;
+      font-weight: 700;
+      color: var(--ink);
+      display: flex;
+      align-items: center;
+      gap: 7px;
+    }
+
+    .fc-btn:hover {
+      border-color: var(--ink);
+    }
+
+    .fc-btn.primary {
+      background: var(--ink);
+      color: #fff;
+      border-color: var(--ink);
+    }
+
+    .fc-btn.saved {
+      background: var(--sunset);
+      border-color: var(--sunset);
+      color: #fff;
+    }
+
+    .fc-updated {
+      font-size: 11.5px;
+      color: var(--ink-faint);
+      margin-top: 14px;
+    }
+
+    .fc-note {
+      margin-top: 16px;
+      font-size: 13px;
+      line-height: 1.55;
+      color: var(--ink-soft);
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      padding: 14px 16px;
+    }
+
+    .status-msg {
+      max-width: 560px;
+      margin: 24px auto 0;
+      text-align: center;
+      padding: 16px 20px;
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      font-size: 14px;
+      color: var(--ink-soft);
+      line-height: 1.6;
+    }
+
+    .status-msg.error {
+      border-color: #F3D4CF;
+      background: #FFF6F4;
+      color: var(--alert);
+    }
+
+    /* ---------- tracked flights ---------- */
+    .tracked-section {
+      max-width: 720px;
+      margin: 0 auto;
+      width: 100%;
+      padding: 0 28px 60px;
+    }
+
+    .tracked-section h3 {
+      font-size: 15px;
+      color: var(--ink-soft);
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: .4px;
+      margin-bottom: 12px;
+      font-family: 'Manrope', sans-serif;
+    }
+
+    .tracked-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      padding: 13px 16px;
+      margin-bottom: 8px;
+    }
+
+    .tracked-row .tr-left {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      cursor: pointer;
+      flex: 1;
+      min-width: 0;
+    }
+
+    .tracked-row .tr-flight {
+      font-weight: 700;
+      font-family: 'Fraunces', serif;
+      font-size: 15px;
+    }
+
+    .tracked-row .tr-status {
+      font-size: 12.5px;
+      color: var(--ink-soft);
+    }
+
+    .tracked-row .tr-right {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+
+    .tracked-row .tr-check {
+      background: none;
+      border: 1px solid var(--line);
+      color: var(--ink-soft);
+      font-size: 11px;
+      font-weight: 700;
+      padding: 6px 10px;
+      border-radius: 8px;
+    }
+
+    .tracked-row .tr-check:hover {
+      border-color: var(--ink);
+      color: var(--ink);
+    }
+
+    .tracked-row .tr-remove {
+      background: none;
+      border: none;
+      color: var(--ink-faint);
+      font-size: 16px;
+      padding: 4px 8px;
+    }
+
+    .empty-tracked {
+      color: var(--ink-faint);
+      font-size: 13px;
+      padding: 14px 0;
+    }
+
+    /* ---------- detail page ---------- */
+    .detail-wrap {
+      max-width: 780px;
+      margin: 0 auto;
+      width: 100%;
+      padding: 28px 28px 60px;
+    }
+
+    .detail-back {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      background: none;
+      border: none;
+      color: var(--ink-soft);
+      font-size: 13px;
+      font-weight: 700;
+      padding: 6px 0;
+      margin-bottom: 18px;
+    }
+
+    .detail-back:hover {
+      color: var(--ink);
+    }
+
+    .detail-card {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 22px;
+      padding: 28px;
+    }
+
+    .detail-map-holder {
+      margin-top: 22px;
+      border-radius: 18px;
+      overflow: hidden;
+      border: 1px solid var(--line);
+      background: var(--radar-bg);
+      height: 320px;
+      position: relative;
+    }
+
+    .detail-map-holder canvas {
+      display: block;
+      width: 100%;
+      height: 100%;
+    }
+
+    .detail-map-label {
+      position: absolute;
+      top: 12px;
+      left: 14px;
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 10.5px;
+      color: #6C86A8;
+      letter-spacing: .4px;
+      text-transform: uppercase;
+    }
+
+    .detail-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 14px;
+      margin-top: 22px;
+    }
+
+    .detail-route {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 14px;
+      margin-top: 22px;
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      padding: 18px 22px;
+    }
+
+    .detail-route .apt {
+      text-align: center;
+      flex: 1;
+    }
+
+    .detail-route .apt .code {
+      font-family: 'Fraunces', serif;
+      font-size: 22px;
+    }
+
+    .detail-route .apt .city {
+      font-size: 12px;
+      color: var(--ink-soft);
+      margin-top: 2px;
+    }
+
+    .detail-route .apt .when {
+      font-size: 11px;
+      color: var(--ink-faint);
+      margin-top: 4px;
+    }
+
+    .detail-route .arrow {
+      color: var(--ink-faint);
+      font-size: 20px;
+      flex-shrink: 0;
+    }
+
+    /* ---------- explore (technical) tab ---------- */
+    #view-explore {
+      background: var(--radar-bg);
+      color: #DDE6F0;
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      min-height: 60vh;
+    }
+
+    .explore-head {
+      padding: 14px 24px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+      border-bottom: 1px solid var(--radar-line);
+      font-family: 'IBM Plex Mono', monospace;
+    }
+
+    .explore-head .title {
+      font-size: 12px;
+      color: #8CA0BC;
+      letter-spacing: .5px;
+    }
+
+    .region-btn {
+      background: transparent;
+      border: 1px solid var(--radar-line);
+      color: #8CA0BC;
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 11px;
+      padding: 6px 12px;
+      border-radius: 6px;
+    }
+
+    .region-btn.active {
+      background: var(--radar-green);
+      color: #04140C;
+      font-weight: 700;
+      border-color: var(--radar-green);
+    }
+
+    .explore-body {
+      flex: 1;
+      display: flex;
+      min-height: 0;
+    }
+
+    .scope-canvas-holder {
+      flex: 1.4;
+      position: relative;
+      min-height: 320px;
+    }
+
+    #scope {
+      display: block;
+      width: 100%;
+      height: 100%;
+    }
+
+    .explore-list {
+      flex: 1;
+      min-width: 300px;
+      max-width: 420px;
+      border-left: 1px solid var(--radar-line);
+      overflow-y: auto;
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 12px;
+    }
+
+    .erow {
+      display: flex;
+      justify-content: space-between;
+      padding: 9px 16px;
+      border-bottom: 1px solid var(--radar-line);
+      cursor: pointer;
+    }
+
+    .erow:hover {
+      background: #141C2B;
+    }
+
+    .erow .cs {
+      color: #DDE6F0;
+      font-weight: 600;
+    }
+
+    .erow .alt {
+      color: #8CA0BC;
+    }
+
+    .explore-note {
+      padding: 10px 24px;
+      font-size: 11px;
+      color: #5A6C87;
+      font-family: 'IBM Plex Mono', monospace;
+      border-top: 1px solid var(--radar-line);
+    }
+
+    footer {
+      border-top: 1px solid var(--line);
+      padding: 16px 28px;
+      font-size: 11.5px;
+      color: var(--ink-faint);
+      display: flex;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+
+    @media (max-width:640px) {
+
+      .fc-stats,
+      .detail-grid {
+        grid-template-columns: 1fr 1fr;
+      }
+
+      .detail-route {
+        flex-direction: column;
+      }
+
+      .detail-route .arrow {
+        transform: rotate(90deg);
+      }
+
+      .explore-body {
+        flex-direction: column;
+      }
+
+      .explore-list {
+        max-width: none;
+      }
+
+      header {
+        flex-direction: column;
+        gap: 12px;
+        align-items: flex-start;
+      }
+    }
+  </style>
+</head>
+
+<body>
+
+  <header>
+    <div class="brand">
+      <div class="brand-mark">✈</div>
+      <h1>Overhead</h1>
+    </div>
+    <nav class="tabs">
+      <button class="active" data-view="track">Track a flight</button>
+      <button data-view="explore">Explore live map</button>
+    </nav>
+  </header>
+
+  <main>
+    <!-- ============ TRACK VIEW ============ -->
+    <div class="view active" id="view-track">
+      <div class="hero">
+        <h2>Where's your flight <em>right now?</em></h2>
+        <p class="sub">Type a flight number and see it live — altitude, speed, and roughly where it is, explained in
+          plain English. Works whether it's still on the ground, in the air, or has already landed.</p>
+        <div class="search-box">
+          <input id="searchInput" type="text" placeholder="e.g. BA249, AA100, 6E202, or an airline + city"
+            autocomplete="off">
+          <button id="searchBtn">Track it</button>
+        </div>
+        <div class="search-hint" id="searchHint">Works best with an active flight number — try one of the live ones
+          below 👇</div>
+        <div class="chips" id="trendingChips"></div>
+      </div>
+
+      <div class="result-wrap" id="resultWrap"></div>
+
+      <div class="tracked-section">
+        <h3>Your tracked flights</h3>
+        <div id="trackedList"></div>
+      </div>
+    </div>
+
+    <!-- ============ DETAIL VIEW ============ -->
+    <div class="view" id="view-detail">
+      <div class="detail-wrap">
+        <button class="detail-back" id="detailBack">← Back to search</button>
+        <div id="detailBody"></div>
+      </div>
+    </div>
+
+    <!-- ============ EXPLORE VIEW (technical) ============ -->
+    <div class="view" id="view-explore">
+      <div class="explore-head">
+        <span class="title">LIVE ADS-B · all aircraft in view</span>
+        <button class="region-btn active" data-region="eu">EUROPE</button>
+        <button class="region-btn" data-region="na">NORTH AMERICA</button>
+        <button class="region-btn" data-region="asia">EAST ASIA</button>
+        <button class="region-btn" data-region="world">WORLD</button>
+        <span style="margin-left:auto;color:#5A6C87;" id="exploreStatus">connecting…</span>
+      </div>
+      <div class="explore-body">
+        <div class="scope-canvas-holder"><canvas id="scope"></canvas></div>
+        <div class="explore-list" id="exploreList"></div>
+      </div>
+      <div class="explore-note">This is the raw radar view — every aircraft broadcasting ADS-B in the selected region,
+        technical readouts included. Click "Track a flight" above for the friendly version.</div>
+    </div>
+  </main>
+
+  <footer>
+    <span>Live position data: OpenSky Network (ADS-B). Pre-departure schedule info (gate, boarding, planned departure
+      time) isn't in this data — that needs a schedule API (AviationStack / FlightAware / AeroDataBox), which you can
+      wire into server.py with a free key. Until then, "not yet departed" is a best-effort inference, not a
+      confirmed schedule.</span>
+    <span>Relayed through local proxy · server.py</span>
+  </footer>
+
+  <script>
+    (function () {
+      // ============================================================
+      // DATA: airline code lookup (IATA -> ICAO + name)
+      // ============================================================
+      const AIRLINES = {
+        AA: ['AAL', 'American Airlines'], DL: ['DAL', 'Delta Air Lines'], UA: ['UAL', 'United Airlines'],
+        WN: ['SWA', 'Southwest Airlines'], AS: ['ASA', 'Alaska Airlines'], B6: ['JBU', 'JetBlue Airways'],
+        NK: ['NKS', 'Spirit Airlines'], F9: ['FFT', 'Frontier Airlines'], HA: ['HAL', 'Hawaiian Airlines'],
+        AC: ['ACA', 'Air Canada'], WS: ['WJA', 'WestJet'], AM: ['AMX', 'Aeroméxico'],
+        LA: ['LAN', 'LATAM Airlines'], AV: ['AVA', 'Avianca'], CM: ['CMP', 'Copa Airlines'],
+        G3: ['GLO', 'Gol Linhas Aéreas'], AD: ['AZU', 'Azul Brazilian Airlines'],
+        BA: ['BAW', 'British Airways'], VS: ['VIR', 'Virgin Atlantic'], U2: ['EZY', 'easyJet'],
+        FR: ['RYR', 'Ryanair'], LH: ['DLH', 'Lufthansa'], AF: ['AFR', 'Air France'], KL: ['KLM', 'KLM'],
+        IB: ['IBE', 'Iberia'], AZ: ['ITY', 'ITA Airways'], LX: ['SWR', 'Swiss Intl Air Lines'],
+        OS: ['AUA', 'Austrian Airlines'], SN: ['BEL', 'Brussels Airlines'], SK: ['SAS', 'SAS'],
+        AY: ['FIN', 'Finnair'], TP: ['TAP', 'TAP Air Portugal'], EI: ['EIN', 'Aer Lingus'],
+        TK: ['THY', 'Turkish Airlines'], SU: ['AFL', 'Aeroflot'], LO: ['LOT', 'LOT Polish Airlines'],
+        EK: ['UAE', 'Emirates'], EY: ['ETD', 'Etihad Airways'], QR: ['QTR', 'Qatar Airways'],
+        SV: ['SVA', 'Saudia'], MS: ['MSR', 'EgyptAir'], ET: ['ETH', 'Ethiopian Airlines'],
+        KQ: ['KQA', 'Kenya Airways'], SA: ['SAA', 'South African Airways'], AT: ['RAM', 'Royal Air Maroc'],
+        P4: ['APK', 'Air Peace'], W3: ['ARA', 'Arik Air'], QF: ['QFA', 'Qantas'], VA: ['VOZ', 'Virgin Australia'],
+        NZ: ['ANZ', 'Air New Zealand'], SQ: ['SIA', 'Singapore Airlines'], CX: ['CPA', 'Cathay Pacific'],
+        TG: ['THA', 'Thai Airways'], MH: ['MAS', 'Malaysia Airlines'], GA: ['GIA', 'Garuda Indonesia'],
+        PR: ['PAL', 'Philippine Airlines'], JL: ['JAL', 'Japan Airlines'], NH: ['ANA', 'All Nippon Airways'],
+        KE: ['KAL', 'Korean Air'], OZ: ['AAR', 'Asiana Airlines'], CA: ['CCA', 'Air China'],
+        MU: ['CES', 'China Eastern Airlines'], CZ: ['CSN', 'China Southern Airlines'],
+        AI: ['AIC', 'Air India'], '6E': ['IGO', 'IndiGo'],
+        // Africa
+        WB: ['RWD', 'RwandAir'], TC: ['ATC', 'Air Tanzania'], PW: ['PRF', 'Precision Air'],
+        DT: ['DTA', 'TAAG Angola Airlines'], MK: ['MAU', 'Air Mauritius'], TM: ['LAM', 'LAM Mozambique Airlines'],
+        UM: ['AZW', 'Air Zimbabwe'], HF: ['VUN', "Air Côte d'Ivoire"], KP: ['KAF', 'ASKY Airlines'],
+        HM: ['SEY', 'Air Seychelles'], BP: ['BOT', 'Air Botswana'],
+        FA: ['FLH', 'FlySafair'], TU: ['TAR', 'Tunisair'], AH: ['DAH', 'Air Algérie'],
+        HC: ['SNG', 'Air Sénégal'], UR: ['UGA', 'Uganda Airlines'], FN: ['FTZ', 'fastjet'],
+        QI: ['IBM', 'Ibom Air'],
+        // Middle East & South Asia (more)
+        XY: ['KNE', 'flynas'], F3: ['FAD', 'flyadeal'],
+        // Middle East & South Asia
+        RJ: ['RJA', 'Royal Jordanian'], ME: ['MEA', 'Middle East Airlines'], KU: ['KAC', 'Kuwait Airways'],
+        GF: ['GFA', 'Gulf Air'], WY: ['OMA', 'Oman Air'], FZ: ['FDB', 'flydubai'], G9: ['ABY', 'Air Arabia'],
+        PK: ['PIA', 'Pakistan International Airlines'], UL: ['ALK', 'SriLankan Airlines'], RA: ['RNA', 'Nepal Airlines'],
+        // Europe (more carriers, incl. low-cost)
+        W6: ['WZZ', 'Wizz Air'], VY: ['VLG', 'Vueling'], DY: ['NOZ', 'Norwegian Air Shuttle'],
+        PC: ['PGT', 'Pegasus Airlines'], DE: ['CFG', 'Condor'], S7: ['SBI', 'S7 Airlines'],
+        KC: ['KZR', 'Air Astana'], HY: ['UZB', 'Uzbekistan Airways'],
+        FI: ['ICE', 'Icelandair'], BT: ['BTI', 'airBaltic'], OU: ['CTN', 'Croatia Airlines'],
+        JU: ['ASL', 'Air Serbia'], EW: ['EWG', 'Eurowings'], X3: ['TFL', 'TUI fly'], A3: ['AEE', 'Aegean Airlines'],
+        // Americas
+        Y4: ['VOI', 'Volaris'], VB: ['VIV', 'VivaAerobus'], JA: ['JAT', 'JetSmart'],
+        H2: ['SKU', 'Sky Airline'], P5: ['WIN', 'Wingo'], BW: ['BWA', 'Caribbean Airlines'],
+        G4: ['AAY', 'Allegiant Air'], SY: ['SCX', 'Sun Country Airlines'],
+        // Asia-Pacific (more)
+        '5J': ['CEB', 'Cebu Pacific'], AK: ['AXM', 'AirAsia'], D7: ['XAX', 'AirAsia X'],
+        JQ: ['JST', 'Jetstar'], '7C': ['JJA', 'Jeju Air'], TW: ['TWB', "T'way Air"],
+        VN: ['HVN', 'Vietnam Airlines'], VJ: ['VJC', 'VietJet Air'], CI: ['CAL', 'China Airlines'],
+        BR: ['EVA', 'EVA Air'], TR: ['TGW', 'Scoot'], SG: ['SEJ', 'SpiceJet'],
+        UK: ['VTI', 'Vistara'], IX: ['AXB', 'Air India Express']
+      };
+      const ICAO_TO_NAME = {};
+      Object.values(AIRLINES).forEach(([icao, name]) => ICAO_TO_NAME[icao] = name);
+
+      // ============================================================
+      // DATA: major airports for "near X" / "over Y" descriptions
+      // ============================================================
+      const AIRPORTS = [
+        ['JFK', 'New York', 40.6413, -73.7781], ['LAX', 'Los Angeles', 33.9416, -118.4085],
+        ['ORD', 'Chicago', 41.9742, -87.9073], ['ATL', 'Atlanta', 33.6407, -84.4277],
+        ['DFW', 'Dallas', 32.8998, -97.0403], ['DEN', 'Denver', 39.8561, -104.6737],
+        ['SFO', 'San Francisco', 37.6213, -122.3790], ['SEA', 'Seattle', 47.4502, -122.3088],
+        ['MIA', 'Miami', 25.7959, -80.2870], ['BOS', 'Boston', 42.3656, -71.0096],
+        ['IAD', 'Washington DC', 38.9531, -77.4565], ['YYZ', 'Toronto', 43.6777, -79.6248],
+        ['YVR', 'Vancouver', 49.1967, -123.1815], ['MEX', 'Mexico City', 19.4363, -99.0721],
+        ['GRU', 'São Paulo', -23.4356, -46.4731], ['GIG', 'Rio de Janeiro', -22.8090, -43.2506],
+        ['EZE', 'Buenos Aires', -34.8222, -58.5358], ['SCL', 'Santiago', -33.3930, -70.7858],
+        ['LIM', 'Lima', -12.0219, -77.1143], ['BOG', 'Bogotá', 4.7016, -74.1469],
+        ['LHR', 'London', 51.4700, -0.4543], ['CDG', 'Paris', 49.0097, 2.5479],
+        ['FRA', 'Frankfurt', 50.0379, 8.5622], ['AMS', 'Amsterdam', 52.3105, 4.7683],
+        ['MAD', 'Madrid', 40.4936, -3.5668], ['BCN', 'Barcelona', 41.2974, 2.0833],
+        ['FCO', 'Rome', 41.8003, 12.2389], ['MUC', 'Munich', 48.3538, 11.7861],
+        ['ZRH', 'Zurich', 47.4647, 8.5492], ['VIE', 'Vienna', 48.1103, 16.5697],
+        ['IST', 'Istanbul', 41.2753, 28.7519], ['SVO', 'Moscow', 55.9736, 37.4125],
+        ['CPH', 'Copenhagen', 55.6180, 12.6560], ['OSL', 'Oslo', 60.1976, 11.1004],
+        ['ARN', 'Stockholm', 59.6519, 17.9186], ['HEL', 'Helsinki', 60.3172, 24.9633],
+        ['WAW', 'Warsaw', 52.1657, 20.9671], ['LIS', 'Lisbon', 38.7813, -9.1359],
+        ['DUB', 'Dublin', 53.4213, -6.2701], ['BRU', 'Brussels', 50.9014, 4.4844],
+        ['ATH', 'Athens', 37.9364, 23.9445], ['DXB', 'Dubai', 25.2532, 55.3657],
+        ['AUH', 'Abu Dhabi', 24.4330, 54.6511], ['DOH', 'Doha', 25.2731, 51.6081],
+        ['JED', 'Jeddah', 21.6796, 39.1565], ['RUH', 'Riyadh', 24.9576, 46.6988],
+        ['CAI', 'Cairo', 30.1219, 31.4056], ['JNB', 'Johannesburg', -26.1392, 28.2460],
+        ['CPT', 'Cape Town', -33.9648, 18.6017], ['NBO', 'Nairobi', -1.3192, 36.9278],
+        ['ADD', 'Addis Ababa', 8.9779, 38.7993], ['LOS', 'Lagos', 6.5774, 3.3212],
+        ['ABV', 'Abuja', 9.0068, 7.2632], ['ACC', 'Accra', 5.6052, -0.1668],
+        ['CMN', 'Casablanca', 33.3675, -7.5900], ['DEL', 'Delhi', 28.5562, 77.1000],
+        ['BOM', 'Mumbai', 19.0896, 72.8656], ['BLR', 'Bangalore', 13.1986, 77.7066],
+        ['DAC', 'Dhaka', 23.8431, 90.3978], ['CMB', 'Colombo', 7.1808, 79.8842],
+        ['BKK', 'Bangkok', 13.6900, 100.7501], ['SIN', 'Singapore', 1.3644, 103.9915],
+        ['KUL', 'Kuala Lumpur', 2.7456, 101.7099], ['CGK', 'Jakarta', -6.1256, 106.6559],
+        ['MNL', 'Manila', 14.5086, 121.0198], ['HKG', 'Hong Kong', 22.3080, 113.9185],
+        ['TPE', 'Taipei', 25.0797, 121.2342], ['ICN', 'Seoul', 37.4602, 126.4407],
+        ['NRT', 'Tokyo', 35.7720, 140.3929], ['HND', 'Tokyo', 35.5494, 139.7798],
+        ['KIX', 'Osaka', 34.4347, 135.2440], ['PVG', 'Shanghai', 31.1443, 121.8083],
+        ['PEK', 'Beijing', 40.0799, 116.6031], ['CAN', 'Guangzhou', 23.3924, 113.2988],
+        ['SYD', 'Sydney', -33.9399, 151.1753], ['MEL', 'Melbourne', -37.6690, 144.8410],
+        ['AKL', 'Auckland', -37.0082, 174.7850], ['HNL', 'Honolulu', 21.3187, -157.9224],
+        ['ANC', 'Anchorage', 61.1743, -149.9963], ['YUL', 'Montreal', 45.4706, -73.7408],
+        // Africa (extra, for the "friends & family" use case)
+        ['DAR', 'Dar es Salaam', -6.8781, 39.2026], ['KGL', 'Kigali', -1.9686, 30.1395],
+        ['EBB', 'Entebbe/Kampala', 0.0424, 32.4435], ['HRE', 'Harare', -17.9318, 31.0928],
+        ['LUN', 'Lusaka', -15.3308, 28.4526], ['MPM', 'Maputo', -25.9208, 32.5726],
+        ['GBE', 'Gaborone', -24.5552, 25.9182], ['WDH', 'Windhoek', -22.4799, 17.4709],
+        ['DKR', 'Dakar', 14.6708, -17.0730], ['ABJ', 'Abidjan', 5.2614, -3.9263],
+        ['COO', 'Cotonou', 6.3572, 2.3844], ['LFW', 'Lomé', 6.1656, 1.2545],
+        ['NIM', 'Niamey', 13.4815, 2.1836], ['OUA', 'Ouagadougou', 12.3532, -1.5124],
+        ['BKO', 'Bamako', 12.5335, -7.9497], ['TUN', 'Tunis', 36.8510, 10.2272],
+        ['ALG', 'Algiers', 36.6910, 3.2154], ['TIP', 'Tripoli', 32.6635, 13.1591],
+        ['KRT', 'Khartoum', 15.5895, 32.5532], ['JUB', 'Juba', 4.8722, 31.6011],
+        ['MRU', 'Port Louis', -20.4302, 57.6836], ['SEZ', 'Mahé', -4.6743, 55.5218]
+      ];
+
+      // ICAO airport code -> nice display, for departure/arrival airports returned
+      // by OpenSky's historical /flights/all (which uses 4-letter ICAO codes).
+      const ICAO_TO_AIRPORT = {
+        KJFK: ['JFK', 'New York', 40.6413, -73.7781], KLAX: ['LAX', 'Los Angeles', 33.9416, -118.4085],
+        KORD: ['ORD', 'Chicago', 41.9742, -87.9073], KATL: ['ATL', 'Atlanta', 33.6407, -84.4277],
+        KDFW: ['DFW', 'Dallas', 32.8998, -97.0403], KDEN: ['DEN', 'Denver', 39.8561, -104.6737],
+        KSFO: ['SFO', 'San Francisco', 37.6213, -122.3790], KSEA: ['SEA', 'Seattle', 47.4502, -122.3088],
+        KMIA: ['MIA', 'Miami', 25.7959, -80.2870], KBOS: ['BOS', 'Boston', 42.3656, -71.0096],
+        KIAD: ['IAD', 'Washington DC', 38.9531, -77.4565], CYYZ: ['YYZ', 'Toronto', 43.6777, -79.6248],
+        CYVR: ['YVR', 'Vancouver', 49.1967, -123.1815], CYUL: ['YUL', 'Montreal', 45.4706, -73.7408],
+        MMMX: ['MEX', 'Mexico City', 19.4363, -99.0721], SBGR: ['GRU', 'São Paulo', -23.4356, -46.4731],
+        SBGL: ['GIG', 'Rio de Janeiro', -22.8090, -43.2506], SAEZ: ['EZE', 'Buenos Aires', -34.8222, -58.5358],
+        SCEL: ['SCL', 'Santiago', -33.3930, -70.7858], SPJC: ['LIM', 'Lima', -12.0219, -77.1143],
+        SKBO: ['BOG', 'Bogotá', 4.7016, -74.1469], EGLL: ['LHR', 'London', 51.4700, -0.4543],
+        LFPG: ['CDG', 'Paris', 49.0097, 2.5479], EDDF: ['FRA', 'Frankfurt', 50.0379, 8.5622],
+        EHAM: ['AMS', 'Amsterdam', 52.3105, 4.7683], LEMD: ['MAD', 'Madrid', 40.4936, -3.5668],
+        LEBL: ['BCN', 'Barcelona', 41.2974, 2.0833], LIRF: ['FCO', 'Rome', 41.8003, 12.2389],
+        EDDM: ['MUC', 'Munich', 48.3538, 11.7861], LSZH: ['ZRH', 'Zurich', 47.4647, 8.5492],
+        LOWW: ['VIE', 'Vienna', 48.1103, 16.5697], LTFM: ['IST', 'Istanbul', 41.2753, 28.7519],
+        UUEE: ['SVO', 'Moscow', 55.9736, 37.4125], EKCH: ['CPH', 'Copenhagen', 55.6180, 12.6560],
+        ENGM: ['OSL', 'Oslo', 60.1976, 11.1004], ESSA: ['ARN', 'Stockholm', 59.6519, 17.9186],
+        EFHK: ['HEL', 'Helsinki', 60.3172, 24.9633], EPWA: ['WAW', 'Warsaw', 52.1657, 20.9671],
+        LPPT: ['LIS', 'Lisbon', 38.7813, -9.1359], EIDW: ['DUB', 'Dublin', 53.4213, -6.2701],
+        EBBR: ['BRU', 'Brussels', 50.9014, 4.4844], LGAV: ['ATH', 'Athens', 37.9364, 23.9445],
+        OMDB: ['DXB', 'Dubai', 25.2532, 55.3657], OMAA: ['AUH', 'Abu Dhabi', 24.4330, 54.6511],
+        OTHH: ['DOH', 'Doha', 25.2731, 51.6081], OEJN: ['JED', 'Jeddah', 21.6796, 39.1565],
+        OERK: ['RUH', 'Riyadh', 24.9576, 46.6988], HECA: ['CAI', 'Cairo', 30.1219, 31.4056],
+        FAOR: ['JNB', 'Johannesburg', -26.1392, 28.2460], FACT: ['CPT', 'Cape Town', -33.9648, 18.6017],
+        HKJK: ['NBO', 'Nairobi', -1.3192, 36.9278], HAAB: ['ADD', 'Addis Ababa', 8.9779, 38.7993],
+        DNMM: ['LOS', 'Lagos', 6.5774, 3.3212], DNAA: ['ABV', 'Abuja', 9.0068, 7.2632],
+        DGAA: ['ACC', 'Accra', 5.6052, -0.1668], GMMN: ['CMN', 'Casablanca', 33.3675, -7.5900],
+        HTDA: ['DAR', 'Dar es Salaam', -6.8781, 39.2026], HRYR: ['KGL', 'Kigali', -1.9686, 30.1395],
+        HUEN: ['EBB', 'Entebbe/Kampala', 0.0424, 32.4435], FVHA: ['HRE', 'Harare', -17.9318, 31.0928],
+        FLLS: ['LUN', 'Lusaka', -15.3308, 28.4526], FQMA: ['MPM', 'Maputo', -25.9208, 32.5726],
+        FBSK: ['GBE', 'Gaborone', -24.5552, 25.9182], FYWH: ['WDH', 'Windhoek', -22.4799, 17.4709],
+        GOBD: ['DKR', 'Dakar', 14.6708, -17.0730], DIAP: ['ABJ', 'Abidjan', 5.2614, -3.9263],
+        VIDP: ['DEL', 'Delhi', 28.5562, 77.1000], VABB: ['BOM', 'Mumbai', 19.0896, 72.8656],
+        VOBL: ['BLR', 'Bangalore', 13.1986, 77.7066], VGHS: ['DAC', 'Dhaka', 23.8431, 90.3978],
+        VCBI: ['CMB', 'Colombo', 7.1808, 79.8842], VTBS: ['BKK', 'Bangkok', 13.6900, 100.7501],
+        WSSS: ['SIN', 'Singapore', 1.3644, 103.9915], WMKK: ['KUL', 'Kuala Lumpur', 2.7456, 101.7099],
+        WIII: ['CGK', 'Jakarta', -6.1256, 106.6559], RPLL: ['MNL', 'Manila', 14.5086, 121.0198],
+        VHHH: ['HKG', 'Hong Kong', 22.3080, 113.9185], RCTP: ['TPE', 'Taipei', 25.0797, 121.2342],
+        RKSI: ['ICN', 'Seoul', 37.4602, 126.4407], RJAA: ['NRT', 'Tokyo', 35.7720, 140.3929],
+        RJTT: ['HND', 'Tokyo', 35.5494, 139.7798], RJBB: ['KIX', 'Osaka', 34.4347, 135.2440],
+        ZSPD: ['PVG', 'Shanghai', 31.1443, 121.8083], ZBAA: ['PEK', 'Beijing', 40.0799, 116.6031],
+        ZGGG: ['CAN', 'Guangzhou', 23.3924, 113.2988], YSSY: ['SYD', 'Sydney', -33.9399, 151.1753],
+        YMML: ['MEL', 'Melbourne', -37.6690, 144.8410], NZAA: ['AKL', 'Auckland', -37.0082, 174.7850],
+        PHNL: ['HNL', 'Honolulu', 21.3187, -157.9224], PANC: ['ANC', 'Anchorage', 61.1743, -149.9963]
+      };
+
+      const REGIONS_TEXT = [
+        ['the continental United States', 24, -125, 49, -66],
+        ['Canada', 42, -141, 70, -52], ['Mexico', 14, -118, 33, -86],
+        ['Central America', 7, -93, 18, -77], ['the Caribbean', 10, -85, 27, -59],
+        ['South America', -56, -82, 13, -34],
+        ['Western Europe', 43, -10, 60, 10], ['Northern Europe', 54, 4, 71, 32],
+        ['Southern Europe', 35, -10, 46, 30], ['Eastern Europe', 45, 20, 60, 40],
+        ['North Africa', 15, -18, 37, 35], ['West Africa', 4, -18, 15, 15],
+        ['East Africa', -12, 29, 15, 52], ['Southern Africa', -35, 10, -12, 41],
+        ['the Middle East', 12, 34, 42, 63], ['South Asia', 5, 60, 37, 92],
+        ['Southeast Asia', -11, 92, 23, 141], ['East Asia', 18, 100, 54, 150],
+        ['Russia', 41, 40, 78, 180], ['Australia', -44, 112, -10, 154],
+        ['New Zealand', -47, 166, -34, 179]
+      ];
+
+      function haversine(lat1, lon1, lat2, lon2) {
+        const R = 6371, dLat = (lat2 - lat1) * Math.PI / 180, dLon = (lon2 - lon1) * Math.PI / 180;
+        const a = Math.sin(dLat / 2) ** 2 + Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLon / 2) ** 2;
+        return 2 * R * Math.asin(Math.sqrt(a));
+      }
+      function describeLocation(lat, lon) {
+        let nearest = null, best = Infinity;
+        AIRPORTS.forEach(([code, city, alat, alon]) => {
+          const d = haversine(lat, lon, alat, alon);
+          if (d < best) { best = d; nearest = [code, city]; }
+        });
+        if (best < 40) return `right over ${nearest[1]}`;
+        if (best < 220) return `near ${nearest[1]}`;
+        for (const [name, lamin, lomin, lamax, lomax] of REGIONS_TEXT) {
+          if (lat >= lamin && lat <= lamax && lon >= lomin && lon <= lomax) return `over ${name}`;
+        }
+        if (lon > -70 && lon < 20) return 'over the Atlantic Ocean';
+        if (lon >= 20 && lon < 100) return 'over the Indian Ocean';
+        return 'over the Pacific Ocean';
+      }
+      function airportLabel(icao) {
+        const a = ICAO_TO_AIRPORT[(icao || '').toUpperCase()];
+        if (!a) return { code: icao || '—', city: icao ? 'airport code' : 'unknown' };
+        return { code: a[0], city: a[1], lat: a[2], lon: a[3] };
+      }
+      function fmtWhen(unixSeconds) {
+        if (!unixSeconds) return null;
+        const d = new Date(unixSeconds * 1000);
+        return d.toLocaleString(undefined, { weekday: 'short', hour: '2-digit', minute: '2-digit' });
+      }
+      function timeAgo(unixSeconds) {
+        if (!unixSeconds) return '—';
+        const mins = Math.max(0, Math.round((Date.now() / 1000 - unixSeconds) / 60));
+        if (mins < 1) return 'just now';
+        if (mins < 60) return `${mins} min ago`;
+        const hrs = Math.floor(mins / 60);
+        if (hrs < 24) return `${hrs}h ${mins % 60}m ago`;
+        return `${Math.floor(hrs / 24)}d ago`;
+      }
+
+      // ============================================================
+      // Proxy fetch helpers (through server.py)
+      // ============================================================
+      class RateLimitError extends Error { constructor(msg) { super(msg); this.name = 'RateLimitError'; } }
+
+      async function fetchStates(bboxOrNull) {
+        let url = '/proxy/states';
+        if (bboxOrNull) {
+          const b = bboxOrNull;
+          url += `?lamin=${b[0]}&lomin=${b[1]}&lamax=${b[2]}&lomax=${b[3]}`;
+        }
+        const res = await fetch(url);
+        if (res.status === 429) throw new RateLimitError('OpenSky is rate-limiting us right now');
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const data = await res.json();
+        return (data.states || []).filter(s => s[5] != null && s[6] != null);
+      }
+      async function fetchFlightStatus(prefix, iata) {
+        let url = '/proxy/flight?callsign=' + encodeURIComponent(prefix);
+        if (iata) url += '&flightnumber=' + encodeURIComponent(iata);
+        const res = await fetch(url);
+        if (res.status === 429) throw new RateLimitError('OpenSky is rate-limiting us right now');
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        return res.json();
+      }
+      async function fetchTrack(icao24) {
+        const res = await fetch('/proxy/track?icao24=' + encodeURIComponent(icao24));
+        if (res.status === 429) throw new RateLimitError('OpenSky is rate-limiting us right now');
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const data = await res.json();
+        const states = (data.states || []).filter(s => s[5] != null && s[6] != null);
+        return states[0] || null;
+      }
+
+      // ============================================================
+      // TRACK VIEW
+      // ============================================================
+      const searchInput = document.getElementById('searchInput');
+      const searchBtn = document.getElementById('searchBtn');
+      const searchHint = document.getElementById('searchHint');
+      const resultWrap = document.getElementById('resultWrap');
+      const trendingChips = document.getElementById('trendingChips');
+      const trackedList = document.getElementById('trackedList');
+
+      function parseQuery(raw) {
+        const q = raw.trim().toUpperCase().replace(/\s+/g, '');
+        // IATA style: 2 letters/digits + flight number, e.g. BA249, 6E202
+        const iataMatch = q.match(/^([A-Z0-9]{2})(\d{1,4})$/);
+        if (iataMatch && AIRLINES[iataMatch[1]]) {
+          const [icao, name] = AIRLINES[iataMatch[1]];
+          return { prefix: icao + iataMatch[2], name, iata: q };
+        }
+        // ICAO style: 3 letters + flight number, e.g. BAW249
+        const icaoMatch = q.match(/^([A-Z]{3})(\d{1,4})$/);
+        if (icaoMatch) {
+          const name = ICAO_TO_NAME[icaoMatch[1]] || icaoMatch[1];
+          return { prefix: q, name, iata: q };
+        }
+        return { prefix: q, name: null, iata: q };
+      }
+
+      function classify(s) {
+        if (s[8]) return 'ground';
+        const vr = s[11];
+        if (vr != null && vr > 2) return 'climb';
+        if (vr != null && vr < -2) return 'descend';
+        return 'cruise';
+      }
+
+      let searchCooldown = false;
+      async function runSearch(rawQuery) {
+        if (searchCooldown) return;
+        if (!rawQuery.trim()) { return; }
+        const parsed = parseQuery(rawQuery);
+        searchBtn.disabled = true; searchCooldown = true;
+        searchBtn.textContent = 'Searching…';
+        resultWrap.innerHTML = `<div class="status-msg">Scanning the sky — and, if it's not airborne, the last few hours of history — for <b>${parsed.iata}</b>…</div>`;
+        try {
+          const result = await fetchFlightStatus(parsed.prefix, parsed.iata);
+          if (result.status === 'airborne') {
+            renderFlightCard(result.state, parsed);
+          } else if (result.status === 'landed') {
+            renderLandedCard(result.flight, parsed);
+          } else if (result.status === 'scheduled') {
+            renderScheduledCard(result.flight, parsed);
+          } else {
+            renderNotFoundCard(parsed, result.searched_hours || 6);
+          }
+        } catch (err) {
+          if (err instanceof RateLimitError) {
+            resultWrap.innerHTML = `<div class="status-msg error">OpenSky's free tier is rate-limiting us right now. Give it 10–20 seconds and try again — or register a free OpenSky account and add it to <code>server.py</code> (see the comment near the top) for a much higher limit.</div>`;
+          } else {
+            resultWrap.innerHTML = `<div class="status-msg error">Couldn't reach the live feed. Check that <code>server.py</code> is running, then try again.</div>`;
+          }
+          console.error(err);
+        }
+        searchBtn.disabled = false; searchCooldown = false;
+        searchBtn.textContent = 'Track it';
+      }
+
+      function renderNotFoundCard(parsed, hours) {
+        resultWrap.innerHTML = `<div class="status-msg error">Couldn't find <b>${parsed.iata}</b> in the air right now, and no landing in the last ${hours} hours either.
+          <br><br>That usually means one of three things: it <b>hasn't departed yet</b> (scheduled flights are invisible to us until wheels-up — we only see live transponder data, not airline schedules), it's sitting at the gate with its transponder off, or the flight number format wasn't recognized.
+          Search again closer to departure and Overhead will pick it up the moment it's airborne. Try one of the live flights below in the meantime.</div>`;
+      }
+
+      function renderScheduledCard(flight, parsed) {
+        const dep = airportLabel(flight.departureAirport);
+        const arr = airportLabel(flight.arrivalAirport);
+        const label = flight.statusLabel;
+        const phaseText = label ? label : 'Not departed yet';
+        const storyExtra = label && label !== 'Expected'
+          ? ` Status from the schedule feed: <b>${label}</b>.`
+          : '';
+        resultWrap.innerHTML = `
+      <div class="flight-card">
+        <div class="fc-top">
+          <div>
+            <div class="fc-airline">${parsed.name || 'Unknown operator'}</div>
+            <div class="fc-flightno">${parsed.iata}</div>
+          </div>
+          <div class="fc-phase scheduled"><span class="pulse"></span>${phaseText}</div>
+        </div>
+        <p class="fc-story"><b>${parsed.iata}</b> hasn't taken off yet${flight.departureTime ? `, scheduled around <b>${fmtWhen(flight.departureTime)}</b>` : ''}.${storyExtra} Overhead will switch to live tracking automatically once it's airborne.</p>
+        <div class="detail-route" style="margin-top:20px;">
+          <div class="apt"><div class="code">${dep.code}</div><div class="city">${dep.city}</div></div>
+          <div class="arrow">→</div>
+          <div class="apt"><div class="code">${arr.code}</div><div class="city">${arr.city}</div></div>
+        </div>
+        <div class="fc-actions"><button class="fc-btn primary" id="refreshBtn">↻ Check again</button></div>
+      </div>`;
+        document.getElementById('refreshBtn').onclick = () => runSearch(parsed.iata);
+      }
+
+      function renderLandedCard(flight, parsed) {
+        const dep = airportLabel(flight.estDepartureAirport);
+        const arr = airportLabel(flight.estArrivalAirport);
+        const landedWhen = flight.lastSeen ? `${fmtWhen(flight.lastSeen)} (${timeAgo(flight.lastSeen)})` : 'recently';
+        const airline = parsed.name || ICAO_TO_NAME[(flight.callsign || '').trim().slice(0, 3).toUpperCase()] || 'Unknown operator';
+        const callsign = (flight.callsign || parsed.iata).trim();
+        resultWrap.innerHTML = `
+      <div class="flight-card">
+        <div class="fc-top">
+          <div>
+            <div class="fc-airline">${airline}</div>
+            <div class="fc-flightno">${callsign}</div>
+          </div>
+          <div class="fc-phase landed">Landed</div>
+        </div>
+        <p class="fc-story"><b>${callsign}</b> looks to have <b>landed${arr.city !== 'unknown' ? ' at ' + arr.city : ''}</b>, last seen around <b>${landedWhen}</b>.</p>
+        <div class="detail-route">
+          <div class="apt">
+            <div class="code">${dep.code}</div><div class="city">${dep.city}</div>
+            <div class="when">${flight.firstSeen ? fmtWhen(flight.firstSeen) : ''}</div>
+          </div>
+          <div class="arrow">→</div>
+          <div class="apt">
+            <div class="code">${arr.code}</div><div class="city">${arr.city}</div>
+            <div class="when">${flight.lastSeen ? fmtWhen(flight.lastSeen) : ''}</div>
+          </div>
+        </div>
+        <div class="fc-note">Based on OpenSky's historical ADS-B track, not the airline's own arrivals board — treat the landing time as approximate.</div>
+        <div class="fc-actions">
+          <button class="fc-btn primary" id="refreshBtn">↻ Check again</button>
+          <button class="fc-btn" id="shareBtn">Copy status</button>
+        </div>
+      </div>`;
+        document.getElementById('refreshBtn').onclick = () => runSearch(parsed.iata);
+        document.getElementById('shareBtn').onclick = () => {
+          const plain = `${callsign} landed at ${arr.city}, last seen ${landedWhen}.`;
+          navigator.clipboard?.writeText(plain).then(() => {
+            const btn = document.getElementById('shareBtn');
+            btn.textContent = 'Copied!'; setTimeout(() => btn.textContent = 'Copy status', 1500);
+          });
+        };
+      }
+
+      function renderFlightCard(s, parsed) {
+        const callsign = (s[1] || '').trim() || s[0].toUpperCase();
+        const icaoPrefix = callsign.slice(0, 3);
+        const airlineName = parsed.name || ICAO_TO_NAME[icaoPrefix] || 'Unknown operator';
+        const cls = classify(s);
+        const lat = s[6], lon = s[5];
+        const altFt = s[7] != null ? Math.round(s[7] * 3.28084 / 500) * 500 : null;
+        const kmh = s[9] != null ? Math.round(s[9] * 3.6) : null;
+        const mph = s[9] != null ? Math.round(s[9] * 2.23694) : null;
+        const loc = describeLocation(lat, lon);
+
+        const phaseLabel = { ground: 'On the ground', climb: 'Climbing', descend: 'Descending', cruise: 'Cruising' }[cls];
+        const phaseClass = cls === 'ground' ? 'ground' : '';
+
+        let story;
+        if (cls === 'ground') {
+          story = `<b>${callsign}</b> is on the ground, ${loc}. It hasn't started climbing yet — could be taxiing, boarding, or just landed.`;
+        } else {
+          const verb = cls === 'climb' ? 'climbing through' : cls === 'descend' ? 'descending through' : 'cruising at';
+          story = `<b>${callsign}</b> is ${verb} <b>${altFt?.toLocaleString()} ft</b>, ${loc}, doing about <b>${kmh} km/h</b> (${mph} mph).`;
+        }
+
+        const flightKey = callsign;
+        const isSaved = getTracked().includes(flightKey);
+
+        resultWrap.innerHTML = `
+      <div class="flight-card">
+        <div class="fc-top">
+          <div>
+            <div class="fc-airline">${airlineName}</div>
+            <div class="fc-flightno">${callsign}</div>
+          </div>
+          <div class="fc-phase ${phaseClass}"><span class="pulse"></span>${phaseLabel}</div>
+        </div>
+        <p class="fc-story">${story}</p>
+        <div class="fc-stats">
+          <div class="fc-stat"><div class="label">Altitude</div><div class="val">${altFt != null ? altFt.toLocaleString() + ' ft' : '—'}</div></div>
+          <div class="fc-stat"><div class="label">Speed</div><div class="val">${kmh != null ? kmh + ' km/h' : '—'}</div></div>
+          <div class="fc-stat"><div class="label">Heading</div><div class="val">${s[10] != null ? Math.round(s[10]) + '°' : '—'}</div></div>
+        </div>
+        <div class="fc-mini-map"><canvas id="miniMap"></canvas></div>
+        <div class="fc-actions">
+          <button class="fc-btn primary" id="detailBtn">Full details & live map →</button>
+          <button class="fc-btn ${isSaved ? 'saved' : ''}" id="saveBtn">${isSaved ? '★ Tracking' : '☆ Track this flight'}</button>
+          <button class="fc-btn" id="shareBtn">Copy status</button>
+        </div>
+        <div class="fc-updated">Updated just now · position data via OpenSky ADS-B</div>
+      </div>
+    `;
+        drawMiniMap('miniMap', lat, lon, s[10] || 0);
+
+        document.getElementById('detailBtn').onclick = () => openDetail(callsign, parsed, s);
+        document.getElementById('saveBtn').onclick = () => {
+          toggleTracked(flightKey);
+          renderFlightCard(s, parsed);
+          renderTrackedList();
+        };
+        document.getElementById('shareBtn').onclick = () => {
+          const plain = story.replace(/<\/?b>/g, '');
+          navigator.clipboard?.writeText(plain).then(() => {
+            const btn = document.getElementById('shareBtn');
+            btn.textContent = 'Copied!'; setTimeout(() => btn.textContent = 'Copy status', 1500);
+          });
+        };
+      }
+
+      function drawMiniMap(canvasId, lat, lon, heading, trail) {
+        const canvas = document.getElementById(canvasId);
+        if (!canvas) return;
+        const rect = canvas.parentElement.getBoundingClientRect();
+        canvas.width = rect.width * devicePixelRatio; canvas.height = rect.height * devicePixelRatio;
+        canvas.style.width = rect.width + 'px'; canvas.style.height = rect.height + 'px';
+        const ctx = canvas.getContext('2d');
+        // simple local equirectangular window centered on the aircraft (+/- span deg)
+        const span = 15;
+        function project(la, lo) {
+          const x = ((lo - (lon - span)) / (span * 2)) * canvas.width;
+          const y = canvas.height - ((la - (lat - span)) / (span * 2)) * canvas.height;
+          return [x, y];
+        }
+        ctx.strokeStyle = 'rgba(61,255,154,0.08)'; ctx.lineWidth = 1;
+        for (let i = 0; i <= 8; i++) {
+          const x = i * canvas.width / 8; ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, canvas.height); ctx.stroke();
+          const y = i * canvas.height / 8; ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(canvas.width, y); ctx.stroke();
+        }
+        // nearby airports as small dots
+        AIRPORTS.forEach(([code, city, alat, alon]) => {
+          if (Math.abs(alat - lat) < span && Math.abs(alon - lon) < span) {
+            const [x, y] = project(alat, alon);
+            ctx.fillStyle = '#5A6C87'; ctx.beginPath(); ctx.arc(x, y, 3, 0, 7); ctx.fill();
+            ctx.fillStyle = '#8CA0BC'; ctx.font = (11 * devicePixelRatio) + 'px Manrope, sans-serif';
+            ctx.fillText(city, x + 7, y + 4);
+          }
+        });
+        // flight trail, if we have one (detail page live tracking)
+        if (trail && trail.length > 1) {
+          ctx.strokeStyle = 'rgba(255,106,77,0.55)'; ctx.lineWidth = 2;
+          ctx.beginPath();
+          trail.forEach(([tla, tlo], i) => {
+            const [x, y] = project(tla, tlo);
+            if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+          });
+          ctx.stroke();
+        }
+        const [x, y] = project(lat, lon);
+        ctx.save(); ctx.translate(x, y); ctx.rotate(heading * Math.PI / 180);
+        ctx.fillStyle = '#FF6A4D';
+        ctx.beginPath(); ctx.moveTo(0, -9); ctx.lineTo(6, 7); ctx.lineTo(-6, 7); ctx.closePath(); ctx.fill();
+        ctx.restore();
+      }
+
+      function drawRouteMap(canvasId, dep, arr) {
+        const canvas = document.getElementById(canvasId);
+        if (!canvas) return;
+        const rect = canvas.parentElement.getBoundingClientRect();
+        canvas.width = rect.width * devicePixelRatio; canvas.height = rect.height * devicePixelRatio;
+        canvas.style.width = rect.width + 'px'; canvas.style.height = rect.height + 'px';
+        const ctx = canvas.getContext('2d');
+        ctx.strokeStyle = 'rgba(61,255,154,0.06)';
+        for (let i = 0; i <= 10; i++) {
+          const x = i * canvas.width / 10; ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, canvas.height); ctx.stroke();
+        }
+        if (!dep.lat || !arr.lat) {
+          ctx.fillStyle = '#6C86A8'; ctx.font = (13 * devicePixelRatio) + 'px Manrope, sans-serif';
+          ctx.textAlign = 'center';
+          ctx.fillText('Route map unavailable for this airport pair', canvas.width / 2, canvas.height / 2);
+          return;
+        }
+        const pad = 0.15;
+        const lamin = Math.min(dep.lat, arr.lat), lamax = Math.max(dep.lat, arr.lat);
+        const lomin = Math.min(dep.lon, arr.lon), lomax = Math.max(dep.lon, arr.lon);
+        const laSpan = Math.max(lamax - lamin, 4) * (1 + pad * 2);
+        const loSpan = Math.max(lomax - lomin, 4) * (1 + pad * 2);
+        const laMid = (lamin + lamax) / 2, loMid = (lomin + lomax) / 2;
+        function project(la, lo) {
+          const x = ((lo - (loMid - loSpan / 2)) / loSpan) * canvas.width;
+          const y = canvas.height - ((la - (laMid - laSpan / 2)) / laSpan) * canvas.height;
+          return [x, y];
+        }
+        const [dx, dy] = project(dep.lat, dep.lon);
+        const [ax, ay] = project(arr.lat, arr.lon);
+        ctx.strokeStyle = 'rgba(255,106,77,0.6)'; ctx.lineWidth = 2; ctx.setLineDash([6, 6]);
+        ctx.beginPath(); ctx.moveTo(dx, dy); ctx.lineTo(ax, ay); ctx.stroke(); ctx.setLineDash([]);
+        [[dx, dy, dep.city], [ax, ay, arr.city]].forEach(([x, y, label]) => {
+          ctx.fillStyle = '#3DFF9A'; ctx.beginPath(); ctx.arc(x, y, 5, 0, 7); ctx.fill();
+          ctx.fillStyle = '#DDE6F0'; ctx.font = (12 * devicePixelRatio) + 'px Manrope, sans-serif';
+          ctx.textAlign = 'center'; ctx.fillText(label, x, y - 12);
+        });
+      }
+
+      // ---------- trending chips ----------
+      async function loadTrending() {
+        try {
+          const states = await fetchStates(null);
+          const withCallsign = states.filter(s => {
+            const cs = (s[1] || '').trim(); return cs.length >= 4 && ICAO_TO_NAME[cs.slice(0, 3)] && !s[8];
+          });
+          const picks = withCallsign.sort(() => Math.random() - 0.5).slice(0, 6);
+          trendingChips.innerHTML = '';
+          picks.forEach(s => {
+            const cs = (s[1] || '').trim();
+            const chip = document.createElement('button');
+            chip.className = 'chip';
+            chip.innerHTML = `<span class="dot"></span>${cs}`;
+            chip.onclick = () => { searchInput.value = cs; runSearch(cs); window.scrollTo({ top: 0, behavior: 'smooth' }); };
+            trendingChips.appendChild(chip);
+          });
+          if (picks.length === 0) {
+            trendingChips.innerHTML = '<span style="font-size:12px;color:var(--ink-faint);">No recognizable airline flights loaded yet — try searching directly.</span>';
+          }
+          bgRateLimited = 0;
+        } catch (e) {
+          if (e instanceof RateLimitError) {
+            bgRateLimited = Math.min(bgRateLimited + 1, 5);
+            trendingChips.innerHTML = '<span style="font-size:12px;color:var(--ink-faint);">Rate-limited by OpenSky right now — trending flights will reappear once it eases up.</span>';
+          } else { console.error(e); }
+        }
+      }
+
+      // ---------- tracked flights (localStorage) ----------
+      function getTracked() { try { return JSON.parse(localStorage.getItem('overhead_tracked') || '[]'); } catch (e) { return []; } }
+      function setTracked(arr) { localStorage.setItem('overhead_tracked', JSON.stringify(arr)); }
+      function toggleTracked(key) {
+        let t = getTracked();
+        if (t.includes(key)) t = t.filter(k => k !== key); else t.push(key);
+        setTracked(t);
+      }
+      async function renderTrackedList() {
+        const tracked = getTracked();
+        if (tracked.length === 0) {
+          trackedList.innerHTML = '<div class="empty-tracked">Nothing tracked yet — search a flight above and hit "Track this flight" to pin it here. Flights you pin stay here whether they\'re airborne, on the ground, or already landed.</div>';
+          return;
+        }
+        trackedList.innerHTML = tracked.map(k => `
+      <div class="tracked-row" data-key="${k}">
+        <div class="tr-left" data-open="${k}"><div><div class="tr-flight">${k}</div><div class="tr-status">checking live feed…</div></div></div>
+        <div class="tr-right">
+          <button class="tr-check" data-check="${k}">Full check</button>
+          <button class="tr-remove" data-remove="${k}">✕</button>
+        </div>
+      </div>
+    `).join('');
+        trackedList.querySelectorAll('[data-remove]').forEach(btn => {
+          btn.onclick = () => { toggleTracked(btn.dataset.remove); renderTrackedList(); };
+        });
+        trackedList.querySelectorAll('[data-check]').forEach(btn => {
+          btn.onclick = () => {
+            searchInput.value = btn.dataset.check;
+            runSearch(btn.dataset.check);
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+          };
+        });
+        trackedList.querySelectorAll('[data-open]').forEach(el => {
+          el.onclick = () => {
+            const k = el.dataset.open;
+            const cached = trackedLiveCache[k];
+            if (cached) { openDetail(k, parseQuery(k), cached); }
+            else { searchInput.value = k; runSearch(k); window.scrollTo({ top: 0, behavior: 'smooth' }); }
+          };
+        });
+        // Lightweight pass: only checks the LIVE feed (cheap, one request for everyone
+        // tracked). It does not do the deeper historical lookup used by "Full check" /
+        // the main search box, so it won't hammer OpenSky just to refresh this list.
+        const trackedLiveCache = renderTrackedList._cache || (renderTrackedList._cache = {});
+        try {
+          const states = await fetchStates(null);
+          tracked.forEach(k => {
+            const match = states.find(s => (s[1] || '').trim().toUpperCase() === k.toUpperCase());
+            const row = trackedList.querySelector(`[data-key="${k}"] .tr-status`);
+            if (!row) return;
+            if (!match) {
+              delete trackedLiveCache[k];
+              row.textContent = 'not currently in the air — tap "Full check" for landed/pre-departure status';
+              return;
+            }
+            trackedLiveCache[k] = match;
+            const cls = classify(match);
+            const loc = describeLocation(match[6], match[5]);
+            row.textContent = cls === 'ground' ? `on the ground, ${loc}` : `${{ climb: 'climbing', descend: 'descending', cruise: 'cruising' }[cls]}, ${loc}`;
+          });
+          bgRateLimited = 0;
+        } catch (e) {
+          if (e instanceof RateLimitError) {
+            bgRateLimited = Math.min(bgRateLimited + 1, 5);
+            trackedList.querySelectorAll('.tr-status').forEach(row => { row.textContent = 'rate-limited by OpenSky — will retry shortly'; });
+          }
+        }
+      }
+
+      searchBtn.addEventListener('click', () => runSearch(searchInput.value));
+      searchInput.addEventListener('keydown', e => { if (e.key === 'Enter') runSearch(searchInput.value); });
+
+      // shared: track two consecutive rate-limit hits so background pollers can
+      // quietly back off instead of retrying into the same throttle
+      let bgRateLimited = 0;
+
+      // ============================================================
+      // DETAIL VIEW — full info + live-updating map for one flight
+      // ============================================================
+      const detailBody = document.getElementById('detailBody');
+      const detailBack = document.getElementById('detailBack');
+      let detailPoll = null;
+      let detailTrail = [];
+      let detailIcao24 = null;
+
+      function closeDetail() {
+        clearTimeout(detailPoll); detailPoll = null;
+        detailTrail = []; detailIcao24 = null;
+      }
+
+      function openDetail(callsign, parsed, initialState) {
+        detailTrail = [];
+        detailIcao24 = initialState[0];
+        showView('detail');
+        renderDetailFrame(callsign, parsed, initialState);
+        pollDetail(callsign, parsed);
+      }
+
+      function renderDetailFrame(callsign, parsed, s) {
+        const airlineName = parsed.name || ICAO_TO_NAME[callsign.slice(0, 3)] || 'Unknown operator';
+        const cls = classify(s);
+        const phaseLabel = { ground: 'On the ground', climb: 'Climbing', descend: 'Descending', cruise: 'Cruising' }[cls];
+        const phaseClass = cls === 'ground' ? 'ground' : '';
+        const isSaved = getTracked().includes(callsign);
+        const altFt = s[7] != null ? Math.round(s[7] * 3.28084) : null;
+        const altM = s[7] != null ? Math.round(s[7]) : null;
+        const kmh = s[9] != null ? Math.round(s[9] * 3.6) : null;
+        const mph = s[9] != null ? Math.round(s[9] * 2.23694) : null;
+        const kts = s[9] != null ? Math.round(s[9] * 1.94384) : null;
+        const vr = s[11];
+        const vrFtMin = vr != null ? Math.round(vr * 196.85) : null;
+
+        detailBody.innerHTML = `
+      <div class="detail-card">
+        <div class="fc-top">
+          <div>
+            <div class="fc-airline">${airlineName}</div>
+            <div class="fc-flightno">${callsign}</div>
+          </div>
+          <div class="fc-phase ${phaseClass}"><span class="pulse"></span>${phaseLabel}</div>
+        </div>
+        <p class="fc-story" id="detailStory"></p>
+        <div class="detail-map-holder">
+          <span class="detail-map-label">Live position · updates every 8s</span>
+          <canvas id="detailMap"></canvas>
+        </div>
+        <div class="detail-grid">
+          <div class="fc-stat"><div class="label">Altitude</div><div class="val">${altFt != null ? altFt.toLocaleString() + ' ft' : '—'}</div></div>
+          <div class="fc-stat"><div class="label">Altitude (m)</div><div class="val">${altM != null ? altM.toLocaleString() + ' m' : '—'}</div></div>
+          <div class="fc-stat"><div class="label">Ground speed</div><div class="val">${kmh != null ? kmh + ' km/h' : '—'}</div></div>
+          <div class="fc-stat"><div class="label">Speed (kt / mph)</div><div class="val">${kts != null ? kts + ' kt' : '—'}${mph != null ? ' / ' + mph + ' mph' : ''}</div></div>
+          <div class="fc-stat"><div class="label">Heading</div><div class="val">${s[10] != null ? Math.round(s[10]) + '°' : '—'}</div></div>
+          <div class="fc-stat"><div class="label">Vertical rate</div><div class="val">${vrFtMin != null ? (vrFtMin > 0 ? '+' : '') + vrFtMin.toLocaleString() + ' ft/min' : '—'}</div></div>
+          <div class="fc-stat"><div class="label">Squawk</div><div class="val">${s[14] || '—'}</div></div>
+          <div class="fc-stat"><div class="label">ICAO24 (hex)</div><div class="val" style="font-size:15px;">${(s[0] || '—').toUpperCase()}</div></div>
+          <div class="fc-stat"><div class="label">Origin country</div><div class="val" style="font-size:15px;">${s[2] || '—'}</div></div>
+        </div>
+        <div class="fc-actions">
+          <button class="fc-btn ${isSaved ? 'saved' : ''}" id="detailSaveBtn">${isSaved ? '★ Tracking' : '☆ Track this flight'}</button>
+          <button class="fc-btn" id="detailShareBtn">Copy status</button>
+        </div>
+        <div class="fc-updated" id="detailUpdated">Updated just now · position data via OpenSky ADS-B</div>
+      </div>`;
+
+        document.getElementById('detailSaveBtn').onclick = () => {
+          toggleTracked(callsign);
+          renderDetailFrame(callsign, parsed, s);
+          renderTrackedList();
+        };
+        updateDetailDynamic(callsign, s);
+      }
+
+      function updateDetailDynamic(callsign, s) {
+        const cls = classify(s);
+        const lat = s[6], lon = s[5];
+        const altFt = s[7] != null ? Math.round(s[7] * 3.28084 / 500) * 500 : null;
+        const kmh = s[9] != null ? Math.round(s[9] * 3.6) : null;
+        const loc = describeLocation(lat, lon);
+        const storyEl = document.getElementById('detailStory');
+        if (storyEl) {
+          if (cls === 'ground') {
+            storyEl.innerHTML = `<b>${callsign}</b> is on the ground, ${loc}.`;
+          } else {
+            const verb = cls === 'climb' ? 'climbing through' : cls === 'descend' ? 'descending through' : 'cruising at';
+            storyEl.innerHTML = `<b>${callsign}</b> is ${verb} <b>${altFt?.toLocaleString()} ft</b>, ${loc}, doing about <b>${kmh} km/h</b>.`;
+          }
+        }
+        detailTrail.push([lat, lon]);
+        if (detailTrail.length > 60) detailTrail.shift();
+        drawMiniMap('detailMap', lat, lon, s[10] || 0, detailTrail);
+        const shareBtn = document.getElementById('detailShareBtn');
+        if (shareBtn) {
+          shareBtn.onclick = () => {
+            const plain = storyEl.textContent;
+            navigator.clipboard?.writeText(plain).then(() => {
+              shareBtn.textContent = 'Copied!'; setTimeout(() => shareBtn.textContent = 'Copy status', 1500);
+            });
+          };
+        }
+      }
+
+      async function pollDetail(callsign, parsed) {
+        try {
+          const s = await fetchTrack(detailIcao24);
+          const updatedEl = document.getElementById('detailUpdated');
+          if (s) {
+            updateDetailDynamic(callsign, s);
+            if (updatedEl) updatedEl.textContent = 'Updated just now · position data via OpenSky ADS-B';
+            bgRateLimited = 0;
+          } else if (updatedEl) {
+            updatedEl.textContent = "Lost live signal — it may have landed. Use the search box to check its landing status.";
+          }
+        } catch (e) {
+          if (e instanceof RateLimitError) {
+            bgRateLimited = Math.min(bgRateLimited + 1, 5);
+            const updatedEl = document.getElementById('detailUpdated');
+            if (updatedEl) updatedEl.textContent = 'Rate-limited by OpenSky — backing off…';
+          }
+          /* keep last good frame, try again next tick */
+        }
+        detailPoll = setTimeout(() => pollDetail(callsign, parsed), bgRateLimited > 0 ? 25000 : 8000);
+      }
+
+      detailBack.addEventListener('click', () => {
+        closeDetail();
+        showView('track');
+        setActiveTab('track');
+      });
+
+      // ============================================================
+      // EXPLORE VIEW (technical radar — mostly unchanged from before)
+      // ============================================================
+      const REGIONS = {
+        world: null, na: [14, -170, 75, -50], eu: [34, -12, 71, 40], asia: [0, 95, 50, 150]
+      };
+      let exploreRegion = 'eu', exploreStates = [], explorePoll = null;
+      const scopeCanvas = document.getElementById('scope');
+      const exploreList = document.getElementById('exploreList');
+      const exploreStatus = document.getElementById('exploreStatus');
+
+      function resizeScope() {
+        const rect = scopeCanvas.parentElement.getBoundingClientRect();
+        scopeCanvas.width = rect.width * devicePixelRatio; scopeCanvas.height = rect.height * devicePixelRatio;
+        scopeCanvas.style.width = rect.width + 'px'; scopeCanvas.style.height = rect.height + 'px';
+        drawScope();
+      }
+      function scopeBox() {
+        const b = REGIONS[exploreRegion];
+        return b || [-60, -180, 75, 180];
+      }
+      function projectScope(lat, lon) {
+        const [lamin, lomin, lamax, lomax] = scopeBox();
+        const x = ((lon - lomin) / (lomax - lomin)) * scopeCanvas.width;
+        const y = scopeCanvas.height - ((lat - lamin) / (lamax - lamin)) * scopeCanvas.height;
+        return [x, y];
+      }
+      function drawScope() {
+        const ctx = scopeCanvas.getContext('2d');
+        ctx.clearRect(0, 0, scopeCanvas.width, scopeCanvas.height);
+        ctx.strokeStyle = 'rgba(61,255,154,0.06)';
+        for (let i = 0; i <= 12; i++) {
+          const x = i * scopeCanvas.width / 12; ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, scopeCanvas.height); ctx.stroke();
+        }
+        for (let i = 0; i <= 8; i++) {
+          const y = i * scopeCanvas.height / 8; ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(scopeCanvas.width, y); ctx.stroke();
+        }
+        const COLORS = { emergency: '#FF5C5C', ground: '#5B7A99', transition: '#FFB020', cruise: '#3DFF9A' };
+        exploreStates.forEach(s => {
+          const [x, y] = projectScope(s[6], s[5]);
+          if (x < 0 || x > scopeCanvas.width || y < 0 || y > scopeCanvas.height) return;
+          let cls = s[8] ? 'ground' : (s[14] === '7500' || s[14] === '7600' || s[14] === '7700') ? 'emergency' : (Math.abs(s[11] || 0) > 2 ? 'transition' : 'cruise');
+          ctx.save(); ctx.translate(x, y); ctx.rotate((s[10] || 0) * Math.PI / 180);
+          ctx.fillStyle = COLORS[cls];
+          ctx.beginPath(); ctx.moveTo(0, -5); ctx.lineTo(3, 3.5); ctx.lineTo(-3, 3.5); ctx.closePath(); ctx.fill();
+          ctx.restore();
+        });
+      }
+      function renderExploreList() {
+        exploreList.innerHTML = '';
+        exploreStates.slice(0, 200).sort((a, b) => (b[7] || 0) - (a[7] || 0)).forEach(s => {
+          const row = document.createElement('div'); row.className = 'erow';
+          const alt = s[7] != null ? Math.round(s[7] * 3.28084).toLocaleString() + ' ft' : '—';
+          row.innerHTML = `<span class="cs">${(s[1] || s[0]).trim()}</span><span class="alt">${alt}</span>`;
+          row.onclick = () => {
+            const cs = (s[1] || s[0]).trim();
+            if (!cs) return;
+            const parsed = parseQuery(cs);
+            openDetail(cs, parsed, s);
+          };
+          exploreList.appendChild(row);
+        });
+      }
+      async function pollExplore() {
+        exploreStatus.textContent = 'updating…';
+        try {
+          exploreStates = await fetchStates(REGIONS[exploreRegion]);
+          exploreStatus.textContent = exploreStates.length + ' aircraft live';
+          drawScope(); renderExploreList();
+          bgRateLimited = 0;
+        } catch (e) {
+          if (e instanceof RateLimitError) {
+            bgRateLimited = Math.min(bgRateLimited + 1, 5);
+            exploreStatus.textContent = 'rate-limited by OpenSky — backing off…';
+          } else {
+            exploreStatus.textContent = 'offline — is server.py running?';
+          }
+        }
+        clearTimeout(explorePoll);
+        explorePoll = setTimeout(pollExplore, bgRateLimited > 0 ? 60000 : 25000);
+      }
+      document.querySelectorAll('.region-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+          document.querySelectorAll('.region-btn').forEach(b => b.classList.remove('active'));
+          btn.classList.add('active'); exploreRegion = btn.dataset.region;
+          clearTimeout(explorePoll); pollExplore();
+        });
+      });
+      window.addEventListener('resize', resizeScope);
+
+      // ============================================================
+      // VIEW / TAB SWITCHING
+      // ============================================================
+      function showView(name) {
+        document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+        document.getElementById('view-' + name).classList.add('active');
+        if (name === 'explore') { resizeScope(); if (!explorePoll) pollExplore(); }
+      }
+      function setActiveTab(name) {
+        document.querySelectorAll('nav.tabs button').forEach(b => b.classList.toggle('active', b.dataset.view === name));
+      }
+      document.querySelectorAll('nav.tabs button').forEach(btn => {
+        btn.addEventListener('click', () => {
+          if (document.getElementById('view-detail').classList.contains('active')) closeDetail();
+          setActiveTab(btn.dataset.view);
+          showView(btn.dataset.view);
+        });
+      });
+
+      // ============================================================
+      // BOOT
+      // ============================================================
+      loadTrending();
+      renderTrackedList();
+      (function scheduleTrackedRefresh() {
+        setTimeout(() => { renderTrackedList().finally(scheduleTrackedRefresh); }, bgRateLimited > 0 ? 90000 : 45000);
+      })();
+    })();
+  </script>
+</body>
+
+</html>

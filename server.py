@@ -1,53 +1,43 @@
 #!/usr/bin/env python3
 """
-Overhead — local server + CORS proxy for the OpenSky Network API.
+Overhead — local server + proxy for the adsb.lol community ADS-B API.
 
-Why this exists:
-OpenSky's API responds with `Access-Control-Allow-Origin: https://opensky-network.org`
-only -- browsers block any other origin (including localhost) from reading the
-response, and there is no client-side fix for that. This script fetches OpenSky
-SERVER-SIDE (CORS is a browser rule, not a server-to-server rule) and re-serves
-the JSON from the same origin squawk.html is loaded from, which the browser
-is happy to accept.
+Why the OpenSky version was retired:
+OpenSky deliberately drops traffic from cloud/hosting IP ranges (Render, AWS, ...),
+so a hosted proxy just sees "connect timed out". adsb.lol speaks the ADSBExchange
+v2 JSON format and is meant to be called from apps, so this file fetches from it
+instead and converts each aircraft into the same 17-slot
+"state vector" array OpenSky used. squawk.html therefore keeps reading
+s[0]=icao24, s[1]=callsign, s[5]=lon, s[6]=lat, s[7]=alt (m), s[8]=on_ground,
+s[9]=speed (m/s), s[10]=heading, s[11]=vertical rate (m/s), s[14]=squawk.
+Two extra slots are added: s[17]=registration, s[18]=aircraft type (when known).
 
 Endpoints:
-    /proxy/states                  -> raw OpenSky /states/all (optionally bbox-filtered)
-    /proxy/track?icao24=XXXXXX     -> live state for ONE aircraft (used by the detail page)
-    /proxy/flight?callsign=XXX     -> "where is this flight right now" resolver. Checks the
-                                       live feed first; if the flight isn't airborne it looks
-                                       back through OpenSky's historical /flights/all endpoint
-                                       to say whether it looks recently LANDED, or whether we
-                                       simply have no record (could mean it hasn't departed yet,
-                                       is sitting at the gate not squawking, or the number was
-                                       wrong -- OpenSky is ADS-B only, it has no schedule data,
-                                       so we can never positively confirm "scheduled, not yet
-                                       departed" -- only rule out "currently airborne" and
-                                       "recently landed").
+    /proxy/states?region=eu|na|asia|world   -> sampled busy hubs for a region (250 nm each)
+    /proxy/states?lamin=..&lomin=..&lamax=..&lomax=..
+                                            -> one radius query around the bbox centre
+    /proxy/states?callsign=BAW249,AAL100    -> those callsigns, if airborne (tracked list)
+    /proxy/states                           -> one random busy hub (trending chips)
+    /proxy/track?icao24=XXXXXX              -> live state for ONE aircraft (detail page)
+    /proxy/flight?callsign=XXX              -> airborne / scheduled / not_found resolver
+    /proxy/health                           -> provider status, handy on Render
 
-AUTHENTICATION -- read this if you're seeing 401s/429s:
-OpenSky now EXCLUSIVELY supports OAuth2 client-credentials auth. The old
-username/password Basic-auth scheme has been retired -- if you're on a version
-of this script that still asks for OPENSKY_USERNAME/OPENSKY_PASSWORD, it will
-silently fail to authenticate (or get a 401 from OpenSky) even with correct
-credentials, because Basic auth is no longer accepted at all.
+Important limits vs. OpenSky (these are properties of the data sources):
+  * No "whole planet in one call". Radius queries are capped at 250 nautical miles,
+    so region views are built from a handful of hub queries, not full coverage.
+  * No historical /flights/all, so "recently landed" only works if the optional
+    AeroDataBox schedule key below is configured.
 
-To authenticate:
-  1. Log in to your OpenSky account -> Account page.
-  2. Create an API client there and copy its client_id and client_secret.
-  3. Paste them into OPENSKY_CLIENT_ID / OPENSKY_CLIENT_SECRET below.
-This script then exchanges them for a short-lived (30 min) Bearer access token
-automatically, and refreshes it before it expires or whenever OpenSky returns
-401. Authenticated ("Standard user") access gets a much higher daily credit
-quota than anonymous access, which is the real fix for persistent 429s.
+Configuration (environment variables, all optional):
+    ADSB_PROVIDERS      comma-separated base URLs of ADSBExchange-v2-compatible APIs,
+                        tried in order with failover. default: https://api.adsb.lol
+    ADSB_MIN_INTERVAL   seconds between calls to the same provider (default 1.1;
+                        keep it at or above 1 to be a polite client)
+    ADSB_USER_AGENT     optional, e.g. "overhead/2.0 (+https://your-site.example)" so a
+                        provider can contact you if something misbehaves
+    SCHEDULE_API_KEY / SCHEDULE_API_HOST   AeroDataBox via RapidAPI (schedule + landed)
 
-Left blank, the proxy still runs anonymously (heavily rate limited).
-
-Honesty note: there is no free, keyless source of airline SCHEDULE data (gate, boarding time,
-departure time before wheels-up). If you get a free API key from a schedule provider
-(AeroDataBox on RapidAPI, AviationStack, FlightAware AeroAPI, etc.) you can wire it into
-SCHEDULE_API_* below and /proxy/flight will use it to give a real "scheduled, departs 14:20"
-answer instead of the best-effort fallback. Left blank, the app is upfront with users that it
-can't see pre-departure schedule info.
+Attribution: adsb.lol data is ODbL-licensed; keep the credit in the page footer.
 
 Usage:
     python3 server.py
@@ -64,178 +54,315 @@ import time
 import threading
 import os
 import re
+import math
+import random
 from datetime import datetime, timezone
 
 PORT = int(os.environ.get("PORT", 8000))
-STATES_URL = "https://opensky-network.org/api/states/all"
-FLIGHTS_ALL_URL = "https://opensky-network.org/api/flights/all"
-TOKEN_URL = (
-    "https://auth.opensky-network.org/auth/realms/opensky-network"
-    "/protocol/openid-connect/token"
-)
 
-# ---- OAuth2 client credentials (OpenSky no longer accepts username/password). ----
-# Account page -> API clients -> create one -> paste the id/secret here.
-# ---- OAuth2 client credentials (OpenSky no longer accepts username/password). ----
-# Account page -> API clients -> create one -> paste the id/secret here for local
-# use. When hosted (e.g. on Render), set OPENSKY_CLIENT_ID / OPENSKY_CLIENT_SECRET
-# as environment variables in the dashboard instead -- keeps secrets out of your
-# public GitHub repo, and env vars always win if both are set.
-OPENSKY_CLIENT_ID = os.environ.get("OPENSKY_CLIENT_ID", "")
-OPENSKY_CLIENT_SECRET = os.environ.get("OPENSKY_CLIENT_SECRET", "")
+# ---------------------------------------------------------------------------
+# ADS-B providers (ADSBExchange v2 compatible)
+# ---------------------------------------------------------------------------
+PROVIDER_BASES = [
+    b.strip() for b in os.environ.get(
+        "ADSB_PROVIDERS", "https://api.adsb.lol"
+    ).split(",") if b.strip()
+]
+USER_AGENT = os.environ.get("ADSB_USER_AGENT", "overhead-flight-tracker/2.0")
 
-# How many seconds before a token's reported expiry to proactively refresh it.
-TOKEN_REFRESH_MARGIN = 30
+MIN_REQUEST_INTERVAL = float(os.environ.get("ADSB_MIN_INTERVAL", "1.1"))
+REQUEST_TIMEOUT = 8            # seconds; keep short so a dead provider fails fast
+LIVE_CACHE_TTL = 12            # radius / callsign results are this fresh
+TRACK_CACHE_TTL = 5            # single-aircraft polling on the detail page
+RATE_LIMIT_BACKOFF = 15        # provider cool-down after HTTP 429 (or its Retry-After)
+ERROR_BACKOFF = 30             # cool-down after 5xx / 403 / bad JSON
+UNREACHABLE_BACKOFF = 45       # cool-down after connect/read timeouts
+MAX_RADIUS_NM = 250
+TRACKED_MAX = 8                # tracked-list lookups per refresh (one request each)
+TRACKED_CACHE_TTL = 20
 
-# ---- schedule API: AeroDataBox via RapidAPI free tier (600 units/month) ----
-# RapidAPI -> AeroDataBox -> Endpoints tab -> copy the X-RapidAPI-Key shown in the
-# code snippet (or Account -> My Apps -> your app -> Security tab). For hosted
-# use, set SCHEDULE_API_KEY as an environment variable instead of pasting it here.
+# ---- optional schedule API: AeroDataBox via RapidAPI free tier (600 units/month) ----
 SCHEDULE_API_HOST = os.environ.get("SCHEDULE_API_HOST", "aerodatabox.p.rapidapi.com")
 SCHEDULE_API_KEY = os.environ.get("SCHEDULE_API_KEY", "")
-
-# Cache AeroDataBox lookups for a while -- the free tier is only 600 units/month,
-# so we do not want every "Full check" click or tracked-flight refresh to burn one.
-SCHEDULE_CACHE_TTL = 300  # 5 minutes
-
+SCHEDULE_CACHE_TTL = 300  # 5 minutes -- the free tier is small, don't burn it
 _schedule_cache = {}
 _schedule_cache_lock = threading.Lock()
 
-# How far back (hours) to search OpenSky's historical /flights/all when a flight
-# isn't currently airborne, looking for a recent landing. Each hour costs one more
-# upstream request (OpenSky anonymous access caps a single /flights/all call at a
-# 2-hour window), so keep this modest -- it directly trades off against your rate limit.
-LOOKBACK_HOURS = 4
-CHUNK_HOURS = 2
+# ---------------------------------------------------------------------------
+# Busy hubs used to sample a region (each is queried with a 250 nm radius)
+# ---------------------------------------------------------------------------
+REGION_HUBS = {
+    "eu": [(51.47, -0.45), (50.03, 8.56), (40.49, -3.57), (41.80, 12.24), (41.28, 28.75)],
+    "na": [(40.64, -73.78), (33.64, -84.43), (41.97, -87.91), (32.90, -97.04), (33.94, -118.41)],
+    "asia": [(35.55, 139.78), (37.46, 126.44), (31.14, 121.81), (22.31, 113.92), (40.08, 116.60)],
+    "world": [(51.47, -0.45), (40.64, -73.78), (25.25, 55.37), (1.36, 103.99),
+              (33.94, -118.41), (6.58, 3.32), (-26.14, 28.25)],
+}
 
-# ---- rate-limit protection ----
-MIN_REQUEST_INTERVAL = 3.0      # seconds between any two outgoing OpenSky requests
-LIVE_CACHE_TTL = 12             # states/all (and per-icao24 track) results are this fresh
-HISTORY_CACHE_TTL = 3600 * 6    # /flights/all windows are in the past, so cache them longer
-RETRY_ON_429_WAIT = 6.0         # seconds to back off once if OpenSky itself throttles us
+# ---------------------------------------------------------------------------
+# Provider bookkeeping (per-host pacing, cool-downs, last error for /proxy/health)
+# ---------------------------------------------------------------------------
+class Provider:
+    def __init__(self, base):
+        self.base = base.rstrip("/")
+        self.name = urllib.parse.urlparse(self.base).netloc or self.base
+        self._lock = threading.Lock()
+        self.last_call = 0.0
+        self.down_until = 0.0
+        self.last_status = None
+        self.last_error = None
+        self.last_ok_at = None  # wall-clock
 
-_pacer_lock = threading.Lock()
-_last_call = [0.0]
-_cache = {}  # url -> (expires_at_monotonic, status, data_bytes)
+    def usable(self):
+        return time.monotonic() >= self.down_until
+
+    def pace(self):
+        with self._lock:
+            wait = MIN_REQUEST_INTERVAL - (time.monotonic() - self.last_call)
+            if wait > 0:
+                time.sleep(wait)
+            self.last_call = time.monotonic()
+
+    def mark_ok(self, status=200):
+        self.last_status = status
+        self.last_error = None
+        self.last_ok_at = time.time()
+
+    def mark_fail(self, status, error, message, backoff):
+        self.last_status = status
+        self.last_error = message
+        self.down_until = time.monotonic() + backoff
+        print(f"[adsb] {self.name}: {message} (cooling down {backoff:.0f}s)")
+        return status, {"error": error, "message": f"{self.name}: {message}"}, True
+
+
+PROVIDERS = [Provider(b) for b in PROVIDER_BASES]
+
+_cache = {}  # path -> (expires_at_monotonic, data)
 _cache_lock = threading.Lock()
 
 
-# ---------------------------------------------------------------------------
-# OAuth2 token manager -- fetches + caches a Bearer token via the client
-# credentials flow, refreshing it automatically before it expires.
-# ---------------------------------------------------------------------------
-class TokenManager:
-    def __init__(self, client_id, client_secret):
-        self.client_id = client_id
-        self.client_secret = client_secret
-        self.token = None
-        self.expires_at = 0.0
-        self._lock = threading.Lock()
+def _cache_get(key):
+    with _cache_lock:
+        hit = _cache.get(key)
+    if hit and time.monotonic() <= hit[0]:
+        return hit[1]
+    return None
 
-    def enabled(self):
-        return bool(self.client_id and self.client_secret)
 
-    def get_token(self, force_refresh=False):
-        if not self.enabled():
-            return None
-        with self._lock:
-            if not force_refresh and self.token and time.monotonic() < self.expires_at:
-                return self.token
-            return self._refresh_locked()
+def _cache_put(key, data, ttl):
+    with _cache_lock:
+        _cache[key] = (time.monotonic() + ttl, data)
+        if len(_cache) > 400:  # crude bound so a long-running server can't grow forever
+            now = time.monotonic()
+            for k in [k for k, v in _cache.items() if v[0] < now]:
+                _cache.pop(k, None)
 
-    def _refresh_locked(self):
-        body = urllib.parse.urlencode({
-            "grant_type": "client_credentials",
-            "client_id": self.client_id,
-            "client_secret": self.client_secret,
-        }).encode()
+
+def _try_provider(p, path):
+    """One request to one provider. Returns (status, payload, retryable).
+    retryable=True means "this provider is unhealthy right now -- try the next one"."""
+    p.pace()
+    try:
         req = urllib.request.Request(
-            TOKEN_URL,
-            data=body,
-            headers={"Content-Type": "application/x-www-form-urlencoded"},
-            method="POST",
+            p.base + path,
+            headers={"User-Agent": USER_AGENT, "Accept": "application/json"},
         )
+        with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT) as resp:
+            raw = resp.read()
         try:
-            with urllib.request.urlopen(req, timeout=15) as resp:
-                data = json.loads(resp.read().decode("utf-8"))
-        except urllib.error.HTTPError as e:
-            print("[auth] token request failed:", e.code, e.read()[:300])
-            self.token = None
-            return None
-        except Exception as e:
-            print("[auth] token request failed:", e)
-            self.token = None
-            return None
+            data = json.loads(raw.decode("utf-8"))
+        except ValueError:
+            return p.mark_fail(502, "bad_response", "returned something that isn't JSON", ERROR_BACKOFF)
+        p.mark_ok(200)
+        return 200, data, False
+    except urllib.error.HTTPError as e:
+        if e.code == 429:
+            try:
+                delay = float(e.headers.get("Retry-After") or RATE_LIMIT_BACKOFF)
+            except ValueError:
+                delay = RATE_LIMIT_BACKOFF
+            return p.mark_fail(429, "rate_limited", "rate limited (HTTP 429)", min(max(delay, 5), 120))
+        if e.code in (401, 403):
+            return p.mark_fail(502, "provider_refused",
+                               f"refused the request (HTTP {e.code}) - it may be blocking this server's IP", ERROR_BACKOFF)
+        if e.code >= 500:
+            return p.mark_fail(502, "provider_error", f"server error (HTTP {e.code})", ERROR_BACKOFF)
+        # 404 / 400 etc: the provider is reachable, the query itself was rejected
+        p.mark_ok(e.code)
+        return e.code, {"error": "http_%d" % e.code, "message": f"{p.name}: HTTP {e.code} for {path}"}, False
+    except (urllib.error.URLError, TimeoutError, OSError) as e:
+        reason = getattr(e, "reason", e)
+        return p.mark_fail(504, "upstream_unreachable", f"unreachable ({reason})", UNREACHABLE_BACKOFF)
 
-        self.token = data.get("access_token")
-        expires_in = data.get("expires_in", 1800)
-        self.expires_at = time.monotonic() + max(expires_in - TOKEN_REFRESH_MARGIN, 5)
-        return self.token
+
+def _adsb_request(path):
+    """Try each provider in order. Returns (status, payload)."""
+    last = None
+    for p in PROVIDERS:
+        if not p.usable():
+            continue
+        status, payload, retryable = _try_provider(p, path)
+        if not retryable:
+            return status, payload
+        last = (status, payload)
+    if last is not None:
+        return last
+    cooling = ", ".join(p.name for p in PROVIDERS) or "none configured"
+    return 504, {"error": "upstream_unreachable",
+                 "message": f"All ADS-B providers are cooling down after errors ({cooling}). Retrying shortly."}
 
 
-_tokens = TokenManager(OPENSKY_CLIENT_ID, OPENSKY_CLIENT_SECRET)
+def _cached_adsb(path, ttl):
+    hit = _cache_get(path)
+    if hit is not None:
+        return 200, hit
+    status, payload = _adsb_request(path)
+    if status == 200:
+        _cache_put(path, payload, ttl)
+    return status, payload
 
 
-def _cache_get(url):
-    with _cache_lock:
-        hit = _cache.get(url)
-    if not hit:
+# ---------------------------------------------------------------------------
+# ADSBExchange-v2 aircraft  ->  OpenSky-style state vector
+# ---------------------------------------------------------------------------
+FT_TO_M = 0.3048
+KT_TO_MS = 0.514444
+FPM_TO_MS = 1 / 196.85
+
+
+def _num(x):
+    return x if isinstance(x, (int, float)) and not isinstance(x, bool) else None
+
+
+def ac_to_state(ac, now_s=None):
+    """Returns a 19-element list (17 OpenSky slots + registration + type) or None
+    if the aircraft has no usable position / identity."""
+    lat, lon = _num(ac.get("lat")), _num(ac.get("lon"))
+    hex_ = (ac.get("hex") or "").strip().lower()
+    if lat is None or lon is None or not hex_ or hex_.startswith("~"):
+        return None  # "~" = non-ICAO (TIS-B) targets: no stable id, skip them
+    now_s = now_s or int(time.time())
+
+    alt_baro = ac.get("alt_baro")
+    on_ground = alt_baro == "ground"
+    if on_ground:
+        alt_m = 0.0
+    else:
+        alt_ft = _num(alt_baro)
+        alt_m = round(alt_ft * FT_TO_M, 1) if alt_ft is not None else None
+    geo_ft = _num(ac.get("alt_geom"))
+    geo_m = round(geo_ft * FT_TO_M, 1) if geo_ft is not None else None
+
+    gs = _num(ac.get("gs"))
+    vel = round(gs * KT_TO_MS, 2) if gs is not None else None
+    track = _num(ac.get("track"))
+    rate = _num(ac.get("baro_rate"))
+    if rate is None:
+        rate = _num(ac.get("geom_rate"))
+    vrate = round(rate * FPM_TO_MS, 2) if rate is not None else None
+
+    seen_pos = _num(ac.get("seen_pos"))
+    seen = _num(ac.get("seen"))
+    callsign = (ac.get("flight") or "").strip() or None
+    squawk = ac.get("squawk") or None
+
+    return [
+        hex_,                                                   # 0  icao24
+        callsign,                                               # 1  callsign
+        None,                                                   # 2  origin country (not provided)
+        int(now_s - seen_pos) if seen_pos is not None else now_s,  # 3  time_position
+        int(now_s - seen) if seen is not None else now_s,       # 4  last_contact
+        lon,                                                    # 5
+        lat,                                                    # 6
+        alt_m,                                                  # 7  baro altitude (m)
+        on_ground,                                              # 8
+        vel,                                                    # 9  m/s
+        track,                                                  # 10 true track
+        vrate,                                                  # 11 m/s
+        None,                                                   # 12 sensors
+        geo_m,                                                  # 13 geo altitude (m)
+        squawk,                                                 # 14
+        bool(ac.get("spi")),                                    # 15
+        0,                                                      # 16 position source
+        (ac.get("r") or None),                                  # 17 registration
+        (ac.get("t") or None),                                  # 18 aircraft type
+    ]
+
+
+def _ac_list(payload):
+    if not isinstance(payload, dict):
+        return []
+    lst = payload.get("ac")
+    if lst is None:
+        lst = payload.get("aircraft")
+    return lst if isinstance(lst, list) else []
+
+
+def states_from_payload(payload):
+    now_s = int(time.time())
+    out = []
+    for ac in _ac_list(payload):
+        if isinstance(ac, dict):
+            s = ac_to_state(ac, now_s)
+            if s:
+                out.append(s)
+    return out
+
+
+# ---------------------------------------------------------------------------
+# geometry helpers
+# ---------------------------------------------------------------------------
+def _haversine_nm(lat1, lon1, lat2, lon2):
+    R_NM = 3440.065
+    dlat, dlon = math.radians(lat2 - lat1), math.radians(lon2 - lon1)
+    a = math.sin(dlat / 2) ** 2 + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlon / 2) ** 2
+    return 2 * R_NM * math.asin(math.sqrt(a))
+
+
+def bbox_to_point(lamin, lomin, lamax, lomax):
+    lat, lon = (lamin + lamax) / 2, (lomin + lomax) / 2
+    r = max(_haversine_nm(lat, lon, la, lo) for la in (lamin, lamax) for lo in (lomin, lomax))
+    return lat, lon, int(min(max(r, 5), MAX_RADIUS_NM))
+
+
+def _in_bbox(state, bbox):
+    if not bbox:
+        return True
+    lamin, lomin, lamax, lomax = bbox
+    return lamin <= state[6] <= lamax and lomin <= state[5] <= lomax
+
+
+def _parse_bbox(qs):
+    try:
+        vals = [float(qs[k][0]) for k in ("lamin", "lomin", "lamax", "lomax")]
+    except (KeyError, ValueError, IndexError):
         return None
-    expires_at, status, data = hit
-    if time.monotonic() > expires_at:
-        return None
-    return status, data
+    return tuple(vals)
 
 
-def _cache_put(url, status, data, ttl):
-    with _cache_lock:
-        _cache[url] = (time.monotonic() + ttl, status, data)
+def fetch_point(lat, lon, radius_nm):
+    radius = int(min(max(radius_nm, 1), MAX_RADIUS_NM))
+    return _cached_adsb(f"/v2/point/{lat:.3f}/{lon:.3f}/{radius}", LIVE_CACHE_TTL)
 
 
-def _paced_fetch(url):
-    """Fetch a URL from OpenSky, enforcing a minimum gap since our last call,
-    retrying once (after a short backoff) if OpenSky itself returns 429, and
-    retrying once with a freshly-refreshed token if it returns 401."""
-    attempted_token_refresh = False
-
-    for attempt in range(3):
-        headers = {"User-Agent": "overhead-local-proxy/1.0"}
-        token = _tokens.get_token()
-        if token:
-            headers["Authorization"] = "Bearer " + token
-
-        with _pacer_lock:
-            wait = MIN_REQUEST_INTERVAL - (time.monotonic() - _last_call[0])
-            if wait > 0:
-                time.sleep(wait)
-            _last_call[0] = time.monotonic()
-        try:
-            req = urllib.request.Request(url, headers=headers)
-            with urllib.request.urlopen(req, timeout=15) as resp:
-                return resp.status, resp.read()
-        except urllib.error.HTTPError as e:
-            if e.code == 401 and _tokens.enabled() and not attempted_token_refresh:
-                # Token expired/invalid mid-flight -- force a refresh and retry once.
-                attempted_token_refresh = True
-                _tokens.get_token(force_refresh=True)
-                continue
-            if e.code == 429 and attempt < 2:
-                retry_after = e.headers.get("Retry-After") or e.headers.get(
-                    "X-Rate-Limit-Retry-After-Seconds"
-                )
-                try:
-                    delay = float(retry_after) if retry_after else RETRY_ON_429_WAIT
-                except ValueError:
-                    delay = RETRY_ON_429_WAIT
-                time.sleep(delay)
-                continue
-            return e.code, e.read()
-    return 429, json.dumps({
-        "error": "rate_limited",
-        "message": "OpenSky is throttling requests right now. Wait a bit and try "
-                    "again, or double-check OPENSKY_CLIENT_ID/OPENSKY_CLIENT_SECRET "
-                    "in server.py for a higher authenticated quota.",
-    }).encode()
+def collect_states(points, bbox=None):
+    """Query several (lat, lon, radius) points, merge + dedupe. Returns (status, body_dict)."""
+    merged, last_err, failures = {}, None, 0
+    for lat, lon, radius in points:
+        status, payload = fetch_point(lat, lon, radius)
+        if status != 200:
+            last_err, failures = (status, payload), failures + 1
+            continue
+        for s in states_from_payload(payload):
+            if _in_bbox(s, bbox):
+                merged[s[0]] = s
+    if not merged and last_err is not None:
+        return last_err
+    body = {"time": int(time.time()), "states": list(merged.values())}
+    if failures:
+        body["partial"] = True
+    return 200, body
 
 
 class Handler(http.server.SimpleHTTPRequestHandler):
@@ -247,121 +374,126 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self.send_header("Location", "/squawk.html")
             self.end_headers()
         elif parsed.path == "/proxy/states":
-            self.proxy_states(parsed.query)
+            self.proxy_states(qs)
         elif parsed.path == "/proxy/track":
             self.proxy_track(qs)
         elif parsed.path == "/proxy/flight":
             self.proxy_flight(qs)
+        elif parsed.path == "/proxy/health":
+            self.proxy_health()
         elif parsed.path == "/favicon.ico":
             self.send_response(204)
             self.end_headers()
         else:
             super().do_GET()
 
-    # ---------------- existing raw states proxy (bbox-filterable) ----------------
-    def proxy_states(self, query):
-        url = STATES_URL + ("?" + query if query else "")
-        self._relay_cached(url, LIVE_CACHE_TTL)
+    # ---------------- region / bbox / callsign-list / trending ----------------
+    def proxy_states(self, qs):
+        raw_calls = (qs.get("callsign", [""])[0] or "").upper()
+        region = (qs.get("region", [""])[0] or "").lower()
+        bbox = _parse_bbox(qs)
+
+        if raw_calls:
+            calls = [c for c in re.sub(r"[^A-Z0-9,]", "", raw_calls).split(",") if c][:25]
+            if not calls:
+                self._send_json(400, json.dumps({"error": "callsign required"}).encode())
+                return
+            found, failures, last_err = {}, 0, None
+            for call in calls[:TRACKED_MAX]:
+                status, payload = _cached_adsb("/v2/callsign/" + call, TRACKED_CACHE_TTL)
+                if status != 200:
+                    failures, last_err = failures + 1, (status, payload)
+                    continue
+                for s in states_from_payload(payload):
+                    found[s[0]] = s
+            if failures and not found and last_err is not None:
+                self._send_upstream_error(*last_err)
+                return
+            self._send_json(200, json.dumps({"time": int(time.time()),
+                                             "states": list(found.values())}).encode())
+            return
+
+        if region in REGION_HUBS:
+            points = [(la, lo, MAX_RADIUS_NM) for la, lo in REGION_HUBS[region]]
+        elif bbox:
+            points = [bbox_to_point(*bbox)]
+        else:
+            la, lo = random.choice(REGION_HUBS["world"])
+            points = [(la, lo, MAX_RADIUS_NM)]
+
+        status, body = collect_states(points, bbox if region in REGION_HUBS else None)
+        if status != 200:
+            self._send_upstream_error(status, body)
+            return
+        self._send_json(200, json.dumps(body).encode())
 
     # ---------------- single aircraft, for the live detail-page map ----------------
     def proxy_track(self, qs):
-        icao24 = (qs.get("icao24", [""])[0] or "").strip().lower()
+        icao24 = re.sub(r"[^0-9a-f]", "", (qs.get("icao24", [""])[0] or "").strip().lower())
         if not icao24:
             self._send_json(400, json.dumps({"error": "icao24 required"}).encode())
             return
-        url = STATES_URL + "?icao24=" + urllib.parse.quote(icao24)
-        self._relay_cached(url, LIVE_CACHE_TTL)
+        status, payload = _cached_adsb("/v2/hex/" + icao24, TRACK_CACHE_TTL)
+        if status != 200:
+            self._send_upstream_error(status, payload)
+            return
+        self._send_json(200, json.dumps({"time": int(time.time()),
+                                         "states": states_from_payload(payload)}).encode())
 
-    # ---------------- callsign -> airborne / landed / not_found resolver ----------------
+    # ---------------- callsign -> airborne / scheduled / not_found resolver ----------------
     def proxy_flight(self, qs):
-        prefix = (qs.get("callsign", [""])[0] or "").strip().upper()
-        # Optional: the flight number as the user actually typed it (e.g. "BA249").
-        # OpenSky only speaks ICAO callsign prefixes ("BAW249"), but AeroDataBox's
-        # schedule lookup wants the IATA-style flight number, so the client sends
-        # both and we use whichever fits each provider.
+        prefix = re.sub(r"[^A-Z0-9]", "", (qs.get("callsign", [""])[0] or "").strip().upper())
+        # The flight number as the user typed it ("BA249"); AeroDataBox wants that form.
         flight_number_hint = (qs.get("flightnumber", [""])[0] or "").strip().upper()
         if not prefix:
             self._send_json(400, json.dumps({"error": "callsign required"}).encode())
             return
 
-        # 1) is it airborne / on the ground with a live transponder right now?
-        # (shares the same cache + TTL as /proxy/states, so a search made right after
-        # the page's own polling won't cost an extra upstream request)
-        status, data = self._cached_fetch(STATES_URL, LIVE_CACHE_TTL)
-        if status == 429:
-            self._send_json(429, data)
-            return
+        # 1) is it broadcasting right now? (exact callsign match, e.g. BAW249)
+        status, payload = _cached_adsb("/v2/callsign/" + urllib.parse.quote(prefix), LIVE_CACHE_TTL)
         if status != 200:
-            self._send_json(502, json.dumps({"error": "live feed unreachable (HTTP %s)" % status}).encode())
+            self._send_upstream_error(status, payload)
             return
-        try:
-            states = json.loads(data.decode("utf-8"))
-        except Exception as e:
-            self._send_json(502, json.dumps({"error": "bad response from live feed: " + str(e)}).encode())
-            return
-        for s in states.get("states") or []:
-            cs = (s[1] or "").strip().upper()
-            if cs.startswith(prefix):
+        for s in states_from_payload(payload):
+            if (s[1] or "").upper().startswith(prefix):
                 self._send_json(200, json.dumps({"status": "airborne", "state": s}).encode())
                 return
 
-        # 2) not live -- optional schedule API, if the user wired one in
+        # 2) not live -- optional schedule API, if a key is configured
         sched = self._try_schedule_api(prefix, flight_number_hint)
         if sched is not None:
             self._send_json(200, json.dumps(sched).encode())
             return
 
-        # 3) fall back to OpenSky historical flights, looking for a recent landing.
-        # Past time windows never change, so these are cached for hours, not seconds.
-        now = int(time.time())
-        best = None
-        hours_done = 0
-        while hours_done < LOOKBACK_HOURS:
-            end = now - hours_done * 3600
-            begin = end - CHUNK_HOURS * 3600
-            url = FLIGHTS_ALL_URL + f"?begin={begin}&end={end}"
-            h_status, h_data = self._cached_fetch(url, HISTORY_CACHE_TTL)
-            if h_status == 429:
-                # Don't fail the whole lookup -- just stop searching further back and
-                # report what we know (nothing yet), same as a clean "not found".
-                break
-            chunk = None
-            if h_status == 200:
-                try:
-                    chunk = json.loads(h_data.decode("utf-8"))
-                except Exception:
-                    chunk = None
-            if isinstance(chunk, list):
-                for f in chunk:
-                    cs = (f.get("callsign") or "").strip().upper()
-                    if cs.startswith(prefix):
-                        if best is None or (f.get("lastSeen") or 0) > (best.get("lastSeen") or 0):
-                            best = f
-            if best is not None:
-                break
-            hours_done += CHUNK_HOURS
+        # 3) nothing. There is no historical feed in this data source, so we can't
+        # say whether it recently landed -- searched_hours=0 tells the UI that.
+        self._send_json(200, json.dumps({"status": "not_found", "searched_hours": 0}).encode())
 
-        if best is not None:
-            self._send_json(200, json.dumps({"status": "landed", "flight": best}).encode())
-        else:
-            self._send_json(
-                200,
-                json.dumps({
-                    "status": "not_found",
-                    "searched_hours": LOOKBACK_HOURS,
-                }).encode(),
-            )
+    def proxy_health(self):
+        now = time.monotonic()
+        info = [{
+            "provider": p.name,
+            "usable": p.usable(),
+            "cooldown_seconds": max(0, round(p.down_until - now)),
+            "last_status": p.last_status,
+            "last_error": p.last_error,
+            "last_ok_seconds_ago": round(time.time() - p.last_ok_at) if p.last_ok_at else None,
+        } for p in PROVIDERS]
+        self._send_json(200, json.dumps({"providers": info}, indent=2).encode())
+
+    def _send_upstream_error(self, status, payload):
+        code = 429 if status == 429 else (504 if status == 504 else 502)
+        if not isinstance(payload, dict) or "error" not in payload:
+            payload = {"error": "upstream_error", "message": "Unexpected response from the ADS-B provider."}
+        self._send_json(code, json.dumps(payload).encode())
 
     def _try_schedule_api(self, prefix, flight_number_hint):
         """Ask AeroDataBox for this flight's schedule/status. Returns a dict shaped
         like the client expects ({"status": "scheduled"/"landed", "flight": {...}}),
-        or None to fall through to the OpenSky-only best-effort logic (no key
-        configured, AeroDataBox has no record, or the lookup failed)."""
+        or None to fall through (no key configured, no record, or the lookup failed)."""
         if not SCHEDULE_API_KEY or not SCHEDULE_API_HOST:
             return None
 
-        # AeroDataBox wants an IATA-style flight number ("BA249"), not OpenSky's
-        # ICAO callsign prefix ("BAW249") -- prefer what the user actually typed.
         raw_number = flight_number_hint or prefix
         number = re.sub(r"[^A-Z0-9]", "", raw_number.upper())
         if not number:
@@ -380,12 +512,9 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             }
             try:
                 req = urllib.request.Request(url, headers=headers)
-                with urllib.request.urlopen(req, timeout=15) as resp:
+                with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT) as resp:
                     flights = json.loads(resp.read().decode("utf-8"))
             except urllib.error.HTTPError as e:
-                # 404 = AeroDataBox has never heard of this number; 401/403 = bad key;
-                # 429 = out of free-tier credits for the month. None of these should
-                # break the app -- just fall back to the OpenSky-only logic.
                 print(f"[aerodatabox] HTTP {e.code} for {number}: {e.read()[:200]}")
                 flights = None
             except Exception as e:
@@ -397,16 +526,14 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         if not flights or not isinstance(flights, list):
             return None
 
-        # The endpoint can return several flights (different days / codeshares).
-        # Prefer one that's today in UTC; otherwise take the first result.
         today = datetime.now(timezone.utc).date()
         chosen = None
         for f in flights:
             sched_utc = ((f.get("departure") or {}).get("scheduledTime") or {}).get("utc")
-            if sched_utc and self._parse_adb_time(sched_utc):
-                if self._parse_adb_time(sched_utc).date() == today:
-                    chosen = f
-                    break
+            parsed = self._parse_adb_time(sched_utc) if sched_utc else None
+            if parsed and parsed.date() == today:
+                chosen = f
+                break
         if chosen is None:
             chosen = flights[0]
 
@@ -435,11 +562,6 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                     "callsign": callsign,
                 },
             }
-
-        # Everything else we can still meaningfully show (Expected, CheckIn,
-        # Boarding, GateClosed, Delayed, Canceled, Diverted, Unknown) is reported
-        # as "not departed yet" -- AeroDataBox's own status label is passed through
-        # so the card can say e.g. "Delayed" instead of a flat "Not departed yet".
         return {
             "status": "scheduled",
             "flight": {
@@ -452,15 +574,13 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
     @staticmethod
     def _parse_adb_time(iso_str):
-        """AeroDataBox timestamps look like '2026-09-20T14:35Z' or
-        '2026-09-20T14:35:00Z'. Returns a timezone-aware datetime, or None."""
+        """AeroDataBox timestamps look like '2026-09-20T14:35Z' or '...T14:35:00Z'."""
         if not iso_str:
             return None
         s = iso_str.strip()
         if s.endswith("Z"):
             s = s[:-1] + "+00:00"
         if "T" in s and len(s.split("T", 1)[1].split("+")[0].split("-")[0]) == 5:
-            # "HH:MM" with no seconds -- pad so fromisoformat accepts it
             head, tail = s.split("T", 1)
             time_part, _, offset = tail.partition("+")
             if len(time_part) == 5:
@@ -476,32 +596,14 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         dt = cls._parse_adb_time(iso_str)
         return int(dt.timestamp()) if dt else None
 
-    # ---------------- shared helpers ----------------
-    def _cached_fetch(self, url, ttl):
-        hit = _cache_get(url)
-        if hit is not None:
-            return hit
-        status, data = _paced_fetch(url)
-        # Don't cache errors (other than a 429, which we DO cache briefly so a burst
-        # of client requests during a throttle doesn't each re-trigger the backoff).
-        if status == 200 or status == 429:
-            _cache_put(url, status, data, ttl if status == 200 else RETRY_ON_429_WAIT)
-        return status, data
-
-    def _relay_cached(self, url, ttl):
-        status, data = self._cached_fetch(url, ttl)
-        self._send_json(status, data)
-
     def _send_json(self, status, data_bytes):
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
-        # Wide open since this only ever runs on your own machine for your own use.
         self.send_header("Access-Control-Allow-Origin", "*")
         self.end_headers()
         self.wfile.write(data_bytes)
 
     def log_message(self, fmt, *args):
-        # quieter console output; tolerate any arg types (HTTPStatus enums etc.)
         try:
             if args and "/proxy/" in str(args[0]):
                 print("[proxy]", *args)
@@ -509,22 +611,26 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             pass
 
 
+def _startup_probe():
+    """Log once at boot whether each provider is reachable from THIS machine --
+    the first thing to check in Render's logs if the app shows no aircraft."""
+    for p in PROVIDERS:
+        status, payload, _ = _try_provider(p, "/v2/point/51.47/-0.45/5")
+        if status == 200:
+            print(f"[startup] {p.name}: reachable (HTTP 200, {len(_ac_list(payload))} aircraft near LHR)")
+        else:
+            print(f"[startup] {p.name}: PROBLEM - {payload.get('message') if isinstance(payload, dict) else status}")
+
+
 if __name__ == "__main__":
     os.chdir(os.path.dirname(os.path.abspath(__file__)))
     host = "0.0.0.0" if os.environ.get("PORT") else "127.0.0.1"
     httpd = http.server.ThreadingHTTPServer((host, PORT), Handler)
     print(f"Overhead running -> http://{host}:{PORT}/squawk.html")
-    if _tokens.enabled():
-        print("Authenticating with OpenSky using OAuth2 client credentials...")
-        if _tokens.get_token():
-            print("Auth OK -- using the higher authenticated rate limit.")
-        else:
-            print("WARNING: token request failed -- check OPENSKY_CLIENT_ID/SECRET.")
-            print("         Falling back to anonymous access for now.")
-    else:
-        print("Tip: running anonymously. If you see 429s, create an API client on your")
-        print("     OpenSky account page and set OPENSKY_CLIENT_ID/OPENSKY_CLIENT_SECRET")
-        print("     near the top of this file.")
+    print("ADS-B providers:", ", ".join(p.name for p in PROVIDERS) or "NONE (set ADSB_PROVIDERS)")
+    if not SCHEDULE_API_KEY:
+        print("Tip: set SCHEDULE_API_KEY (AeroDataBox) to get scheduled / recently-landed status.")
+    threading.Thread(target=_startup_probe, daemon=True).start()
     print("Press Ctrl+C to stop.")
     try:
         httpd.serve_forever()

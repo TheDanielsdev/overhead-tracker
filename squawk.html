@@ -858,7 +858,7 @@
     <!-- ============ EXPLORE VIEW (technical) ============ -->
     <div class="view" id="view-explore">
       <div class="explore-head">
-        <span class="title">LIVE ADS-B · all aircraft in view</span>
+        <span class="title">LIVE ADS-B · aircraft near busy hubs</span>
         <button class="region-btn active" data-region="eu">EUROPE</button>
         <button class="region-btn" data-region="na">NORTH AMERICA</button>
         <button class="region-btn" data-region="asia">EAST ASIA</button>
@@ -869,17 +869,13 @@
         <div class="scope-canvas-holder"><canvas id="scope"></canvas></div>
         <div class="explore-list" id="exploreList"></div>
       </div>
-      <div class="explore-note">This is the raw radar view — every aircraft broadcasting ADS-B in the selected region,
-        technical readouts included. Click "Track a flight" above for the friendly version.</div>
+      <div class="explore-note">This is the raw radar view — aircraft broadcasting ADS-B near busy airports in the selected region (sampled from a few 250 nm radius queries, so quiet areas can look empty). Click "Track a flight" above for the friendly version.</div>
     </div>
   </main>
 
   <footer>
-    <span>Live position data: OpenSky Network (ADS-B). Pre-departure schedule info (gate, boarding, planned departure
-      time) isn't in this data — that needs a schedule API (AviationStack / FlightAware / AeroDataBox), which you can
-      wire into server.py with a free key. Until then, "not yet departed" is a best-effort inference, not a
-      confirmed schedule.</span>
-    <span>Relayed through local proxy · server.py</span>
+    <span>Live position data: <a href="https://adsb.lol" target="_blank" rel="noopener">adsb.lol</a> community ADS-B network (ODbL). Scheduled and recently-landed status need an optional schedule API key (AeroDataBox) set on the server; without it, "not yet departed" is a best-effort inference.</span>
+    <span>Relayed through server.py</span>
   </footer>
 
   <script>
@@ -1111,34 +1107,58 @@
       // Proxy fetch helpers (through server.py)
       // ============================================================
       class RateLimitError extends Error { constructor(msg) { super(msg); this.name = 'RateLimitError'; } }
+      // The data source is down / unreachable / refusing this server. It extends
+      // RateLimitError on purpose: every existing "back off and retry" branch then covers
+      // outages too, and runSearch checks UpstreamError first to show a clearer message.
+      class UpstreamError extends RateLimitError { constructor(msg) { super(msg); this.name = 'UpstreamError'; } }
 
-      async function fetchStates(bboxOrNull) {
-        let url = '/proxy/states';
+      function escapeHtml(str) {
+        return String(str).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+      }
+
+      async function getJson(url) {
+        const res = await fetch(url);
+        if (res.status === 429) throw new RateLimitError('The flight data source is rate-limiting us right now');
+        if (res.status === 502 || res.status === 504) {
+          let msg = 'The flight data source is unreachable from the server right now.';
+          try { const j = await res.json(); if (j && j.message) msg = j.message; } catch (e) { /* keep default */ }
+          throw new UpstreamError(msg);
+        }
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        return res.json();
+      }
+
+      const hasPosition = s => s[5] != null && s[6] != null;
+
+      // region: 'eu' | 'na' | 'asia' | 'world' -> the server samples busy hubs for that region.
+      // bbox:   [lamin, lomin, lamax, lomax] -> filters the region's results (or, with no region,
+      //         becomes a single radius query around the box centre).
+      // neither: one random busy hub (used for the trending chips).
+      async function fetchStates(bboxOrNull, region) {
+        const params = [];
+        if (region) params.push('region=' + encodeURIComponent(region));
         if (bboxOrNull) {
           const b = bboxOrNull;
-          url += `?lamin=${b[0]}&lomin=${b[1]}&lamax=${b[2]}&lomax=${b[3]}`;
+          params.push('lamin=' + b[0], 'lomin=' + b[1], 'lamax=' + b[2], 'lomax=' + b[3]);
         }
-        const res = await fetch(url);
-        if (res.status === 429) throw new RateLimitError('OpenSky is rate-limiting us right now');
-        if (!res.ok) throw new Error('HTTP ' + res.status);
-        const data = await res.json();
-        return (data.states || []).filter(s => s[5] != null && s[6] != null);
+        const data = await getJson('/proxy/states' + (params.length ? '?' + params.join('&') : ''));
+        return (data.states || []).filter(hasPosition);
+      }
+      // Live state for a list of tracked callsigns (only the ones broadcasting right now come back).
+      async function fetchTrackedStates(callsigns) {
+        const list = callsigns.map(c => String(c).toUpperCase().replace(/[^A-Z0-9]/g, '')).filter(Boolean);
+        if (!list.length) return [];
+        const data = await getJson('/proxy/states?callsign=' + encodeURIComponent(list.join(',')));
+        return (data.states || []).filter(hasPosition);
       }
       async function fetchFlightStatus(prefix, iata) {
         let url = '/proxy/flight?callsign=' + encodeURIComponent(prefix);
         if (iata) url += '&flightnumber=' + encodeURIComponent(iata);
-        const res = await fetch(url);
-        if (res.status === 429) throw new RateLimitError('OpenSky is rate-limiting us right now');
-        if (!res.ok) throw new Error('HTTP ' + res.status);
-        return res.json();
+        return getJson(url);
       }
       async function fetchTrack(icao24) {
-        const res = await fetch('/proxy/track?icao24=' + encodeURIComponent(icao24));
-        if (res.status === 429) throw new RateLimitError('OpenSky is rate-limiting us right now');
-        if (!res.ok) throw new Error('HTTP ' + res.status);
-        const data = await res.json();
-        const states = (data.states || []).filter(s => s[5] != null && s[6] != null);
-        return states[0] || null;
+        const data = await getJson('/proxy/track?icao24=' + encodeURIComponent(icao24));
+        return (data.states || []).filter(hasPosition)[0] || null;
       }
 
       // ============================================================
@@ -1193,13 +1213,15 @@
           } else if (result.status === 'scheduled') {
             renderScheduledCard(result.flight, parsed);
           } else {
-            renderNotFoundCard(parsed, result.searched_hours || 6);
+            renderNotFoundCard(parsed, result.searched_hours || 0);
           }
         } catch (err) {
-          if (err instanceof RateLimitError) {
-            resultWrap.innerHTML = `<div class="status-msg error">OpenSky's free tier is rate-limiting us right now. Give it 10–20 seconds and try again — or register a free OpenSky account and add it to <code>server.py</code> (see the comment near the top) for a much higher limit.</div>`;
+          if (err instanceof UpstreamError) {
+            resultWrap.innerHTML = `<div class="status-msg error">${escapeHtml(err.message)} Give it a minute and try again.</div>`;
+          } else if (err instanceof RateLimitError) {
+            resultWrap.innerHTML = `<div class="status-msg error">The flight data source is rate-limiting us right now. Give it 15–30 seconds and try again.</div>`;
           } else {
-            resultWrap.innerHTML = `<div class="status-msg error">Couldn't reach the live feed. Check that <code>server.py</code> is running, then try again.</div>`;
+            resultWrap.innerHTML = `<div class="status-msg error">Couldn't reach this app's server. Check that <code>server.py</code> is running, then try again.</div>`;
           }
           console.error(err);
         }
@@ -1208,9 +1230,10 @@
       }
 
       function renderNotFoundCard(parsed, hours) {
-        resultWrap.innerHTML = `<div class="status-msg error">Couldn't find <b>${parsed.iata}</b> in the air right now, and no landing in the last ${hours} hours either.
-          <br><br>That usually means one of three things: it <b>hasn't departed yet</b> (scheduled flights are invisible to us until wheels-up — we only see live transponder data, not airline schedules), it's sitting at the gate with its transponder off, or the flight number format wasn't recognized.
-          Search again closer to departure and Overhead will pick it up the moment it's airborne. Try one of the live flights below in the meantime.</div>`;
+        const lookedBack = hours > 0 ? ` and no landing in the last ${hours} hours either` : '';
+        resultWrap.innerHTML = `<div class="status-msg error">Couldn't find <b>${parsed.iata}</b> in the air right now${lookedBack}.
+          <br><br>That usually means it <b>hasn't departed yet</b> or has <b>already landed</b> — this live feed only sees aircraft that are broadcasting right now, and can't look back at landings or ahead at schedules unless a schedule API key is set on the server. It can also mean the transponder is off at the gate, or the flight number wasn't recognized (some airlines fly under callsigns that don't match their flight numbers).
+          Search again closer to departure and Overhead will pick it up the moment it's airborne.</div>`;
       }
 
       function renderScheduledCard(flight, parsed) {
@@ -1268,7 +1291,7 @@
             <div class="when">${flight.lastSeen ? fmtWhen(flight.lastSeen) : ''}</div>
           </div>
         </div>
-        <div class="fc-note">Based on OpenSky's historical ADS-B track, not the airline's own arrivals board — treat the landing time as approximate.</div>
+        <div class="fc-note">Based on a flight-schedule feed rather than live tracking — treat the landing time as approximate.</div>
         <div class="fc-actions">
           <button class="fc-btn primary" id="refreshBtn">↻ Check again</button>
           <button class="fc-btn" id="shareBtn">Copy status</button>
@@ -1330,7 +1353,7 @@
           <button class="fc-btn ${isSaved ? 'saved' : ''}" id="saveBtn">${isSaved ? '★ Tracking' : '☆ Track this flight'}</button>
           <button class="fc-btn" id="shareBtn">Copy status</button>
         </div>
-        <div class="fc-updated">Updated just now · position data via OpenSky ADS-B</div>
+        <div class="fc-updated">Updated just now · position data via adsb.lol</div>
       </div>
     `;
         drawMiniMap('miniMap', lat, lon, s[10] || 0);
@@ -1458,7 +1481,7 @@
         } catch (e) {
           if (e instanceof RateLimitError) {
             bgRateLimited = Math.min(bgRateLimited + 1, 5);
-            trendingChips.innerHTML = '<span style="font-size:12px;color:var(--ink-faint);">Rate-limited by OpenSky right now — trending flights will reappear once it eases up.</span>';
+            trendingChips.innerHTML = '<span style="font-size:12px;color:var(--ink-faint);">The flight data source is busy or unreachable right now — trending flights will reappear once it recovers.</span>';
           } else { console.error(e); }
         }
       }
@@ -1509,7 +1532,7 @@
         // the main search box, so it won't hammer OpenSky just to refresh this list.
         const trackedLiveCache = renderTrackedList._cache || (renderTrackedList._cache = {});
         try {
-          const states = await fetchStates(null);
+          const states = await fetchTrackedStates(tracked);
           tracked.forEach(k => {
             const match = states.find(s => (s[1] || '').trim().toUpperCase() === k.toUpperCase());
             const row = trackedList.querySelector(`[data-key="${k}"] .tr-status`);
@@ -1528,7 +1551,7 @@
         } catch (e) {
           if (e instanceof RateLimitError) {
             bgRateLimited = Math.min(bgRateLimited + 1, 5);
-            trackedList.querySelectorAll('.tr-status').forEach(row => { row.textContent = 'rate-limited by OpenSky — will retry shortly'; });
+            trackedList.querySelectorAll('.tr-status').forEach(row => { row.textContent = 'data source busy — will retry shortly'; });
           }
         }
       }
@@ -1599,13 +1622,13 @@
           <div class="fc-stat"><div class="label">Vertical rate</div><div class="val">${vrFtMin != null ? (vrFtMin > 0 ? '+' : '') + vrFtMin.toLocaleString() + ' ft/min' : '—'}</div></div>
           <div class="fc-stat"><div class="label">Squawk</div><div class="val">${s[14] || '—'}</div></div>
           <div class="fc-stat"><div class="label">ICAO24 (hex)</div><div class="val" style="font-size:15px;">${(s[0] || '—').toUpperCase()}</div></div>
-          <div class="fc-stat"><div class="label">Origin country</div><div class="val" style="font-size:15px;">${s[2] || '—'}</div></div>
+          <div class="fc-stat"><div class="label">Registration · type</div><div class="val" style="font-size:15px;">${s[17] || '—'}${s[18] ? ' · ' + s[18] : ''}</div></div>
         </div>
         <div class="fc-actions">
           <button class="fc-btn ${isSaved ? 'saved' : ''}" id="detailSaveBtn">${isSaved ? '★ Tracking' : '☆ Track this flight'}</button>
           <button class="fc-btn" id="detailShareBtn">Copy status</button>
         </div>
-        <div class="fc-updated" id="detailUpdated">Updated just now · position data via OpenSky ADS-B</div>
+        <div class="fc-updated" id="detailUpdated">Updated just now · position data via adsb.lol</div>
       </div>`;
 
         document.getElementById('detailSaveBtn').onclick = () => {
@@ -1651,7 +1674,7 @@
           const updatedEl = document.getElementById('detailUpdated');
           if (s) {
             updateDetailDynamic(callsign, s);
-            if (updatedEl) updatedEl.textContent = 'Updated just now · position data via OpenSky ADS-B';
+            if (updatedEl) updatedEl.textContent = 'Updated just now · position data via adsb.lol';
             bgRateLimited = 0;
           } else if (updatedEl) {
             updatedEl.textContent = "Lost live signal — it may have landed. Use the search box to check its landing status.";
@@ -1660,7 +1683,7 @@
           if (e instanceof RateLimitError) {
             bgRateLimited = Math.min(bgRateLimited + 1, 5);
             const updatedEl = document.getElementById('detailUpdated');
-            if (updatedEl) updatedEl.textContent = 'Rate-limited by OpenSky — backing off…';
+            if (updatedEl) updatedEl.textContent = 'Data source busy — backing off…';
           }
           /* keep last good frame, try again next tick */
         }
@@ -1739,14 +1762,14 @@
       async function pollExplore() {
         exploreStatus.textContent = 'updating…';
         try {
-          exploreStates = await fetchStates(REGIONS[exploreRegion]);
+          exploreStates = await fetchStates(REGIONS[exploreRegion], exploreRegion);
           exploreStatus.textContent = exploreStates.length + ' aircraft live';
           drawScope(); renderExploreList();
           bgRateLimited = 0;
         } catch (e) {
           if (e instanceof RateLimitError) {
             bgRateLimited = Math.min(bgRateLimited + 1, 5);
-            exploreStatus.textContent = 'rate-limited by OpenSky — backing off…';
+            exploreStatus.textContent = 'data source busy — backing off…';
           } else {
             exploreStatus.textContent = 'offline — is server.py running?';
           }

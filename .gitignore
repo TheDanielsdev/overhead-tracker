@@ -1,3 +1,8 @@
 *.bak
 patch_squawk.py
+patch_routes.py
+patch_eta.py
+patch_route_diagnostics.py
+patch_route_empty_ok.py
+patch_route_headers.py
 __pycache__/

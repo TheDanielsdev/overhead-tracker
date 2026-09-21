@@ -806,6 +806,48 @@
         align-items: flex-start;
       }
     }
+
+    .route-note {
+      font-size: 12px;
+      line-height: 1.5;
+      color: var(--ink-faint);
+      margin-top: 8px;
+    }
+    .progress-wrap {
+      margin-top: 18px;
+    }
+
+    .progress-bar {
+      position: relative;
+      height: 8px;
+      border-radius: 999px;
+      background: var(--line);
+      overflow: visible;
+    }
+
+    .progress-fill {
+      height: 100%;
+      border-radius: 999px;
+      background: var(--sunset);
+      transition: width .3s;
+    }
+
+    .progress-plane {
+      position: absolute;
+      top: 50%;
+      transform: translate(-50%, -50%) rotate(90deg);
+      font-size: 14px;
+      transition: left .3s;
+    }
+
+    .progress-labels {
+      display: flex;
+      justify-content: space-between;
+      font-size: 11.5px;
+      color: var(--ink-soft);
+      margin-top: 8px;
+      font-weight: 700;
+    }
   </style>
 </head>
 
@@ -869,14 +911,16 @@
         <div class="scope-canvas-holder"><canvas id="scope"></canvas></div>
         <div class="explore-list" id="exploreList"></div>
       </div>
-      <div class="explore-note">This is the raw radar view — aircraft broadcasting ADS-B near busy airports in the selected region (sampled from a few 250 nm radius queries, so quiet areas can look empty). Click "Track a flight" above for the friendly version.</div>
+      <div class="explore-note">This is the raw radar view — aircraft broadcasting ADS-B near busy airports in the
+        selected region (sampled from a few 250 nm radius queries, so quiet areas can look empty). Click "Track a
+        flight" above for the friendly version.</div>
     </div>
   </main>
 
-  <footer>
+  <!-- <footer>
     <span>Live position data: <a href="https://adsb.lol" target="_blank" rel="noopener">adsb.lol</a> community ADS-B network (ODbL). Scheduled and recently-landed status need an optional schedule API key (AeroDataBox) set on the server; without it, "not yet departed" is a best-effort inference.</span>
     <span>Relayed through server.py</span>
-  </footer>
+  </footer> -->
 
   <script>
     (function () {
@@ -1161,6 +1205,105 @@
         return (data.states || []).filter(hasPosition)[0] || null;
       }
 
+      // ---------- departure / destination ----------
+      const routeCache = {};   // callsign -> route object or null (this browser session only)
+
+      function airportBlock(a, label) {
+        const code = a.iata || a.icao || '—';
+        const place = a.city || a.name || '';
+        return `<div class="apt"><div class="code">${escapeHtml(code)}</div><div class="city">${escapeHtml(place)}</div><div class="when">${label}</div></div>`;
+      }
+
+      function routeStripHtml(route) {
+        if (!route) return '<div class="route-note">Departure and destination unknown for this callsign — community route data doesn\'t cover every flight.</div>';
+        const via = (route.via && route.via.length)
+          ? `<div class="route-note" style="text-align:center;">via ${route.via.map(v => escapeHtml(v.iata || v.icao || '')).join(', ')}</div>` : '';
+        const caveat = route.plausible === false
+          ? "Unconfirmed: this aircraft's position doesn't match the listed route, so it may be a different leg or a shared callsign."
+          : 'Route from community flight-plan data — it can lag behind last-minute changes.';
+        return `<div class="detail-route" style="margin-top:18px;">${airportBlock(route.origin, 'Departure')}<div class="arrow">→</div>${airportBlock(route.destination, 'Destination')}</div>${via}<div class="route-note">${caveat}</div>`;
+      }
+
+      async function loadRoute(holderId, callsign, s) {
+        const holder = document.getElementById(holderId);
+        if (!holder || !callsign) return;
+        const lat = s[6], lon = s[5];
+        const render = (route) => {
+          const target = document.getElementById(holderId);
+          if (!target) return;
+          target.innerHTML = routeStripHtml(route) + `<div id="${holderId}-progress"></div>`;
+          refreshProgress(holderId, callsign, s);
+        };
+        if (Object.prototype.hasOwnProperty.call(routeCache, callsign)) {
+          render(routeCache[callsign]);
+          return;
+        }
+        holder.innerHTML = '<div class="route-note">Looking up departure and destination…</div>';
+        try {
+          const data = await getJson('/proxy/route?callsign=' + encodeURIComponent(callsign)
+            + '&lat=' + encodeURIComponent(lat) + '&lon=' + encodeURIComponent(lon));
+          if (data.status === 'ok' || data.status === 'none') {
+            routeCache[callsign] = data.route || null;
+          }
+        } catch (e) { /* enrichment only: never break the card */ }
+        if (!Object.prototype.hasOwnProperty.call(routeCache, callsign)) {
+          const target = document.getElementById(holderId);
+          if (target) target.innerHTML = '<div class="route-note">Route lookup is unavailable right now.</div>';
+          return;
+        }
+        render(routeCache[callsign]);
+      }
+
+      // ---------- flight progress: minutes flown / minutes to go ----------
+      // Estimated from great-circle distance and current ground speed. Real routing,
+      // wind, and the speed drop during descent all mean the true ETA can differ --
+      // this is a ballpark, and the UI copy says so.
+      function estimateProgress(origin, dest, curLat, curLon, speedKmh) {
+        if (!origin || !dest || origin.lat == null || dest.lat == null) return null;
+        const totalKm = haversine(origin.lat, origin.lon, dest.lat, dest.lon);
+        const remainingKm = haversine(curLat, curLon, dest.lat, dest.lon);
+        const flownKm = Math.max(totalKm - remainingKm, 0);
+        const pct = totalKm > 0 ? Math.min(100, Math.max(0, Math.round((flownKm / totalKm) * 100))) : null;
+        const etaMin = speedKmh > 30 ? Math.round((remainingKm / speedKmh) * 60) : null;
+        const elapsedMin = speedKmh > 30 ? Math.round((flownKm / speedKmh) * 60) : null;
+        return { totalKm: Math.round(totalKm), remainingKm: Math.round(remainingKm), flownKm: Math.round(flownKm), pct, etaMin, elapsedMin };
+      }
+      function fmtDuration(mins) {
+        if (mins == null) return 'unknown';
+        if (mins < 60) return mins + ' min';
+        const h = Math.floor(mins / 60), m = mins % 60;
+        return h + 'h' + (m ? ' ' + m + 'm' : '');
+      }
+      function progressHtml(p) {
+        if (!p || p.pct == null) return '';
+        return `
+        <div class="progress-wrap">
+          <div class="progress-bar"><div class="progress-fill" style="width:${p.pct}%"></div><div class="progress-plane" style="left:${p.pct}%">✈</div></div>
+          <div class="progress-labels"><span>${fmtDuration(p.elapsedMin)} flown</span><span>${p.pct}% there</span><span>${fmtDuration(p.etaMin)} to go</span></div>
+          <div class="route-note">${p.flownKm.toLocaleString()} km flown · ${p.remainingKm.toLocaleString()} km remaining of ${p.totalKm.toLocaleString()} km total — estimated from great-circle distance and current speed, so treat it as a ballpark, not a boarding-pass ETA.</div>
+        </div>`;
+      }
+      function refreshProgress(holderId, callsign, s) {
+        const el = document.getElementById(holderId + '-progress');
+        if (!el) return;
+        const route = routeCache[callsign];
+        const cls = classify(s);
+        if (!route || cls === 'ground') { el.innerHTML = ''; return; }
+        const speedKmh = s[9] != null ? s[9] * 3.6 : null;
+        el.innerHTML = progressHtml(estimateProgress(route.origin, route.destination, s[6], s[5], speedKmh));
+      }
+
+      // ---------- squawk codes ----------
+      function squawkNote(code) {
+        if (!code) return '';
+        const notes = {
+          '7500': 'Hijack alert', '7600': 'Radio failure', '7700': 'General emergency',
+          '7000': 'Flying visually (Europe default code)', '1200': 'Flying visually (US default code)',
+          '2000': 'No code assigned yet (Europe)'
+        };
+        return notes[code] || 'Assigned by air traffic control';
+      }
+
       // ============================================================
       // TRACK VIEW
       // ============================================================
@@ -1342,6 +1485,7 @@
           <div class="fc-phase ${phaseClass}"><span class="pulse"></span>${phaseLabel}</div>
         </div>
         <p class="fc-story">${story}</p>
+        <div id="routeHolder"></div>
         <div class="fc-stats">
           <div class="fc-stat"><div class="label">Altitude</div><div class="val">${altFt != null ? altFt.toLocaleString() + ' ft' : '—'}</div></div>
           <div class="fc-stat"><div class="label">Speed</div><div class="val">${kmh != null ? kmh + ' km/h' : '—'}</div></div>
@@ -1357,6 +1501,7 @@
       </div>
     `;
         drawMiniMap('miniMap', lat, lon, s[10] || 0);
+        loadRoute('routeHolder', callsign, s);
 
         document.getElementById('detailBtn').onclick = () => openDetail(callsign, parsed, s);
         document.getElementById('saveBtn').onclick = () => {
@@ -1609,6 +1754,7 @@
           <div class="fc-phase ${phaseClass}"><span class="pulse"></span>${phaseLabel}</div>
         </div>
         <p class="fc-story" id="detailStory"></p>
+        <div id="detailRouteHolder"></div>
         <div class="detail-map-holder">
           <span class="detail-map-label">Live position · updates every 8s</span>
           <canvas id="detailMap"></canvas>
@@ -1620,7 +1766,7 @@
           <div class="fc-stat"><div class="label">Speed (kt / mph)</div><div class="val">${kts != null ? kts + ' kt' : '—'}${mph != null ? ' / ' + mph + ' mph' : ''}</div></div>
           <div class="fc-stat"><div class="label">Heading</div><div class="val">${s[10] != null ? Math.round(s[10]) + '°' : '—'}</div></div>
           <div class="fc-stat"><div class="label">Vertical rate</div><div class="val">${vrFtMin != null ? (vrFtMin > 0 ? '+' : '') + vrFtMin.toLocaleString() + ' ft/min' : '—'}</div></div>
-          <div class="fc-stat"><div class="label">Squawk</div><div class="val">${s[14] || '—'}</div></div>
+          <div class="fc-stat"><div class="label">Squawk</div><div class="val">${s[14] || '—'}</div><div class="route-note" style="margin-top:4px;">${squawkNote(s[14])}</div></div>
           <div class="fc-stat"><div class="label">ICAO24 (hex)</div><div class="val" style="font-size:15px;">${(s[0] || '—').toUpperCase()}</div></div>
           <div class="fc-stat"><div class="label">Registration · type</div><div class="val" style="font-size:15px;">${s[17] || '—'}${s[18] ? ' · ' + s[18] : ''}</div></div>
         </div>
@@ -1631,6 +1777,7 @@
         <div class="fc-updated" id="detailUpdated">Updated just now · position data via adsb.lol</div>
       </div>`;
 
+        loadRoute('detailRouteHolder', callsign, s);
         document.getElementById('detailSaveBtn').onclick = () => {
           toggleTracked(callsign);
           renderDetailFrame(callsign, parsed, s);
@@ -1657,6 +1804,7 @@
         detailTrail.push([lat, lon]);
         if (detailTrail.length > 60) detailTrail.shift();
         drawMiniMap('detailMap', lat, lon, s[10] || 0, detailTrail);
+        refreshProgress('detailRouteHolder', callsign, s);
         const shareBtn = document.getElementById('detailShareBtn');
         if (shareBtn) {
           shareBtn.onclick = () => {

@@ -20,6 +20,8 @@ Endpoints:
     /proxy/states                           -> one random busy hub (trending chips)
     /proxy/track?icao24=XXXXXX              -> live state for ONE aircraft (detail page)
     /proxy/flight?callsign=XXX              -> airborne / scheduled / not_found resolver
+    /proxy/route?callsign=XXX&lat=..&lon=.. -> departure / destination airports for a flight
+                                               (adsb.lol routeset; community flight-plan data)
     /proxy/health                           -> provider status, handy on Render
 
 Important limits vs. OpenSky (these are properties of the data sources):
@@ -35,6 +37,8 @@ Configuration (environment variables, all optional):
                         keep it at or above 1 to be a polite client)
     ADSB_USER_AGENT     optional, e.g. "overhead/2.0 (+https://your-site.example)" so a
                         provider can contact you if something misbehaves
+    ROUTE_API_URL       hexdb.io base URL used for departure/destination airport lookups
+                        (default https://api.adsb.lol/api/0/routeset; set to empty to disable)
     SCHEDULE_API_KEY / SCHEDULE_API_HOST   AeroDataBox via RapidAPI (schedule + landed)
 
 Attribution: adsb.lol data is ODbL-licensed; keep the credit in the page footer.
@@ -80,6 +84,15 @@ UNREACHABLE_BACKOFF = 45       # cool-down after connect/read timeouts
 MAX_RADIUS_NM = 250
 TRACKED_MAX = 8                # tracked-list lookups per refresh (one request each)
 TRACKED_CACHE_TTL = 20
+
+# Route (departure/destination) lookups. Routes don't change mid-flight, so hits are
+# cached for hours; misses for a shorter time; failures back off so the page never stalls.
+ROUTE_API_URL = os.environ.get("ROUTE_API_URL", "https://hexdb.io").strip()  # hexdb.io: simple, documented, GET-only
+ROUTE_TIMEOUT = 6
+ROUTE_HIT_TTL = 6 * 3600
+ROUTE_MISS_TTL = 30 * 60
+ROUTE_FAIL_BACKOFF = 60
+AIRPORT_INFO_TTL = 30 * 24 * 3600  # airport lat/lon/name basically never changes
 
 # ---- optional schedule API: AeroDataBox via RapidAPI free tier (600 units/month) ----
 SCHEDULE_API_HOST = os.environ.get("SCHEDULE_API_HOST", "aerodatabox.p.rapidapi.com")
@@ -365,6 +378,149 @@ def collect_states(points, bbox=None):
     return 200, body
 
 
+# ---------------------------------------------------------------------------
+# Routes: departure / destination airports (hexdb.io)
+#   GET /api/v1/route/icao/{callsign} -> {"flight","route":"DEP-ARR","updatetime"}
+#     or 404 {"status":"404","error":"Route not found."} for an unknown callsign
+#   GET /api/v1/airport/icao/{icao}   -> {"airport","iata","icao","latitude",
+#     "longitude","country_code","region_name"} or 404 if unknown
+# Two requests per fresh lookup (route, then each airport -- airports are cached
+# separately and much longer, since they basically never change). The data is
+# community-maintained, so it can be wrong, stale, or missing for less common
+# routes -- the UI already labels results as approximate.
+# ---------------------------------------------------------------------------
+_route_cache = {}            # CALLSIGN -> (expires_at_monotonic, route_or_None)
+_airport_cache = {}          # ICAO -> (expires_at_monotonic, airport_dict_or_None)
+_route_lock = threading.Lock()
+_airport_lock = threading.Lock()
+_route_pace_lock = threading.Lock()
+_route_last_call = [0.0]
+_route_down_until = [0.0]
+_route_last_error = [None]
+
+
+def _route_store(key, route, ttl):
+    with _route_lock:
+        _route_cache[key] = (time.monotonic() + ttl, route)
+        if len(_route_cache) > 500:
+            now = time.monotonic()
+            for k in [k for k, v in _route_cache.items() if v[0] < now]:
+                _route_cache.pop(k, None)
+
+
+def _route_fail(message):
+    _route_last_error[0] = message
+    _route_down_until[0] = time.monotonic() + ROUTE_FAIL_BACKOFF
+    print(f"[route] lookup failed: {message} (pausing route lookups {ROUTE_FAIL_BACKOFF}s)")
+    return "unavailable", None
+
+
+def _hexdb_pace():
+    with _route_pace_lock:
+        wait = MIN_REQUEST_INTERVAL - (time.monotonic() - _route_last_call[0])
+        if wait > 0:
+            time.sleep(wait)
+        _route_last_call[0] = time.monotonic()
+
+
+def _hexdb_get(path):
+    """GET path from hexdb.io. Returns (status, parsed_json_or_None, error_message_or_None)."""
+    _hexdb_pace()
+    req = urllib.request.Request(
+        ROUTE_API_URL + path,
+        headers={"Accept": "application/json", "User-Agent": USER_AGENT},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=ROUTE_TIMEOUT) as resp:
+            raw = resp.read()
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            return 404, None, None
+        if e.code == 429 or e.code >= 500:
+            body_preview = e.read()[:200].decode("utf-8", errors="replace")
+            return e.code, None, f"HTTP {e.code}. Body preview: {body_preview!r}"
+        return e.code, None, f"HTTP {e.code}"
+    except (urllib.error.URLError, TimeoutError, OSError) as e:
+        return 0, None, str(getattr(e, "reason", e))
+    try:
+        return 200, json.loads(raw.decode("utf-8", errors="replace")), None
+    except ValueError as e:
+        preview = raw[:200].decode("utf-8", errors="replace") if raw else "(empty body)"
+        return 200, None, f"response wasn't JSON ({e}). Body preview: {preview!r}"
+
+
+def _lookup_airport(icao):
+    """ICAO code -> {"icao","iata","city","name","lat","lon","country"} or None (unknown).
+    Cached for a long time -- airport locations don't move."""
+    if not icao:
+        return None
+    icao = icao.upper()
+    with _airport_lock:
+        hit = _airport_cache.get(icao)
+    if hit and time.monotonic() <= hit[0]:
+        return hit[1]
+
+    status, data, err = _hexdb_get("/api/v1/airport/icao/" + urllib.parse.quote(icao))
+    airport = None
+    if status == 200 and isinstance(data, dict) and data.get("icao"):
+        airport = {
+            "icao": (data.get("icao") or "").upper() or None,
+            "iata": (data.get("iata") or "").upper() or None,
+            "city": data.get("airport") or None,   # hexdb calls the airport's display name "airport"
+            "name": data.get("airport") or None,
+            "lat": _num(data.get("latitude")),
+            "lon": _num(data.get("longitude")),
+            "country": data.get("country_code") or None,
+        }
+    elif status not in (200, 404) and err:
+        print(f"[route] airport lookup for {icao} failed: {err}")
+    with _airport_lock:
+        _airport_cache[icao] = (time.monotonic() + AIRPORT_INFO_TTL, airport)
+    return airport
+
+
+def lookup_route(callsign, lat, lon):
+    """Returns (status, route). status is "ok" (route found), "none" (no route known for
+    this callsign) or "unavailable" (lookup disabled / failing right now).
+    lat/lon are accepted for API-compatibility with the old adsb.lol lookup but
+    unused -- hexdb.io's route data isn't position-checked, so there's no
+    "plausible" flag here; the client already treats that as optional."""
+    if not ROUTE_API_URL:
+        return "unavailable", None
+    key = callsign.upper()
+    with _route_lock:
+        hit = _route_cache.get(key)
+    if hit and time.monotonic() <= hit[0]:
+        return ("ok" if hit[1] else "none"), hit[1]
+    if time.monotonic() < _route_down_until[0]:
+        return "unavailable", None
+
+    status, data, err = _hexdb_get("/api/v1/route/icao/" + urllib.parse.quote(key))
+    if status == 404:
+        _route_store(key, None, ROUTE_MISS_TTL)
+        return "none", None
+    if err:
+        return _route_fail(err)
+    if not isinstance(data, dict) or "-" not in (data.get("route") or ""):
+        _route_store(key, None, ROUTE_MISS_TTL)
+        return "none", None
+
+    dep_icao, _, arr_icao = data["route"].partition("-")
+    origin = _lookup_airport(dep_icao.strip())
+    destination = _lookup_airport(arr_icao.strip())
+    if not origin or not destination:
+        # Route string exists but one of the two airports isn't in hexdb's airport
+        # table (rare, but happens for small/regional fields) -- no coordinates to
+        # draw with, so treat it as unknown rather than showing a half-empty route.
+        _route_store(key, None, ROUTE_MISS_TTL)
+        return "none", None
+
+    _route_last_error[0] = None
+    route = {"origin": origin, "destination": destination, "via": [], "plausible": None}
+    _route_store(key, route, ROUTE_HIT_TTL)
+    return "ok", route
+
+
 class Handler(http.server.SimpleHTTPRequestHandler):
     def do_GET(self):
         parsed = urllib.parse.urlparse(self.path)
@@ -379,6 +535,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self.proxy_track(qs)
         elif parsed.path == "/proxy/flight":
             self.proxy_flight(qs)
+        elif parsed.path == "/proxy/route":
+            self.proxy_route(qs)
         elif parsed.path == "/proxy/health":
             self.proxy_health()
         elif parsed.path == "/favicon.ico":
@@ -469,6 +627,20 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         # say whether it recently landed -- searched_hours=0 tells the UI that.
         self._send_json(200, json.dumps({"status": "not_found", "searched_hours": 0}).encode())
 
+    # ---------------- departure / destination airports ----------------
+    def proxy_route(self, qs):
+        callsign = re.sub(r"[^A-Z0-9]", "", (qs.get("callsign", [""])[0] or "").upper())
+        try:
+            lat, lon = float(qs["lat"][0]), float(qs["lon"][0])
+        except (KeyError, ValueError, IndexError):
+            lat = lon = float("nan")
+        if not callsign or not (-90 <= lat <= 90 and -180 <= lon <= 180):
+            self._send_json(400, json.dumps({"error": "callsign, lat and lon required"}).encode())
+            return
+        status, route = lookup_route(callsign, lat, lon)
+        self._send_json(200, json.dumps({"status": status, "route": route,
+                                         "source": "adsb.lol"}).encode())
+
     def proxy_health(self):
         now = time.monotonic()
         info = [{
@@ -479,7 +651,12 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             "last_error": p.last_error,
             "last_ok_seconds_ago": round(time.time() - p.last_ok_at) if p.last_ok_at else None,
         } for p in PROVIDERS]
-        self._send_json(200, json.dumps({"providers": info}, indent=2).encode())
+        route_info = {
+            "enabled": bool(ROUTE_API_URL),
+            "cooldown_seconds": max(0, round(_route_down_until[0] - now)),
+            "last_error": _route_last_error[0],
+        }
+        self._send_json(200, json.dumps({"providers": info, "route_lookup": route_info}, indent=2).encode())
 
     def _send_upstream_error(self, status, payload):
         code = 429 if status == 429 else (504 if status == 504 else 502)

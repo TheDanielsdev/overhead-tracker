@@ -10,7 +10,8 @@ instead and converts each aircraft into the same 17-slot
 "state vector" array OpenSky used. squawk.html therefore keeps reading
 s[0]=icao24, s[1]=callsign, s[5]=lon, s[6]=lat, s[7]=alt (m), s[8]=on_ground,
 s[9]=speed (m/s), s[10]=heading, s[11]=vertical rate (m/s), s[14]=squawk.
-Two extra slots are added: s[17]=registration, s[18]=aircraft type (when known).
+Three extra slots are added: s[17]=registration, s[18]=aircraft type (ICAO code),
+s[19]=aircraft type, human-readable (e.g. "Airbus A320", or None if unrecognized).
 
 Endpoints:
     /proxy/states?region=eu|na|asia|world   -> sampled busy hubs for a region (250 nm each)
@@ -21,14 +22,24 @@ Endpoints:
     /proxy/track?icao24=XXXXXX              -> live state for ONE aircraft (detail page)
     /proxy/flight?callsign=XXX              -> airborne / scheduled / not_found resolver
     /proxy/route?callsign=XXX&lat=..&lon=.. -> departure / destination airports for a flight
-                                               (adsb.lol routeset; community flight-plan data)
-    /proxy/health                           -> provider status, handy on Render
+                                               (hexdb.io; community flight-plan data)
+    /proxy/photo?icao24=XXXXXX              -> a representative photo of that airframe
+                                               (planespotters.net public API)
+    /proxy/health                           -> provider + circuit-breaker status, handy on Render
 
 Important limits vs. OpenSky (these are properties of the data sources):
   * No "whole planet in one call". Radius queries are capped at 250 nautical miles,
     so region views are built from a handful of hub queries, not full coverage.
   * No historical /flights/all, so "recently landed" only works if the optional
     AeroDataBox schedule key below is configured.
+
+Resilience:
+  * Every upstream dependency (ADS-B providers, hexdb.io routes, planespotters.net
+    photos, AeroDataBox schedule) goes through a shared CircuitBreaker (see below):
+    a 429's Retry-After header is honored as a floor on the next wait, repeated
+    failures back off exponentially (capped), and a run of consecutive failures
+    trips the breaker fully open for a guaranteed cool-down so a struggling
+    dependency stops getting hammered instead of being retried on every request.
 
 Configuration (environment variables, all optional):
     ADSB_PROVIDERS      comma-separated base URLs of ADSBExchange-v2-compatible APIs,
@@ -38,10 +49,14 @@ Configuration (environment variables, all optional):
     ADSB_USER_AGENT     optional, e.g. "overhead/2.0 (+https://your-site.example)" so a
                         provider can contact you if something misbehaves
     ROUTE_API_URL       hexdb.io base URL used for departure/destination airport lookups
-                        (default https://api.adsb.lol/api/0/routeset; set to empty to disable)
+                        (default https://hexdb.io; set to empty to disable)
+    PHOTO_API_URL       planespotters.net base URL used for aircraft photos
+                        (default https://api.planespotters.net/pub/photos/hex; set to
+                        empty to disable)
     SCHEDULE_API_KEY / SCHEDULE_API_HOST   AeroDataBox via RapidAPI (schedule + landed)
 
-Attribution: adsb.lol data is ODbL-licensed; keep the credit in the page footer.
+Attribution: adsb.lol data is ODbL-licensed; planespotters.net photos carry a
+photographer credit; both are kept in the UI. Keep the credit in the page footer.
 
 Usage:
     python3 server.py
@@ -65,6 +80,90 @@ from datetime import datetime, timezone
 PORT = int(os.environ.get("PORT", 8000))
 
 # ---------------------------------------------------------------------------
+# Shared resilience primitive: exponential backoff + circuit breaker
+# ---------------------------------------------------------------------------
+class CircuitBreaker:
+    """Tracks the health of one upstream dependency.
+
+    - usable() gates every request: while the breaker is cooling down, callers
+      should skip the request entirely rather than firing it and eating another
+      failure. That's the "halt repeated requests" part.
+    - Each failure doubles the wait (exponential backoff), capped at max_backoff,
+      so a flaky dependency gets progressively less traffic instead of being
+      retried at a constant rate.
+    - A 429's Retry-After header (or any other server-supplied hint) is honored
+      as a floor: the breaker never waits less than what the server asked for,
+      even if the exponential schedule alone would allow an earlier retry.
+    - After `failure_threshold` consecutive failures, the breaker trips fully
+      "open": the cool-down is forced up to at least `open_seconds`, regardless
+      of how small the exponential/retry-after value was, because a long streak
+      of failures usually means the dependency itself is down, not just slow.
+    - Once the cool-down expires the breaker goes "half_open" and lets exactly
+      one probe request through; success closes it again, failure reopens it
+      (extending the cool-down further).
+    """
+
+    def __init__(self, name, base_backoff=5, max_backoff=300, failure_threshold=5, open_seconds=180):
+        self.name = name
+        self.base_backoff = base_backoff
+        self.max_backoff = max_backoff
+        self.failure_threshold = failure_threshold
+        self.open_seconds = open_seconds
+        self._lock = threading.Lock()
+        self.consecutive_failures = 0
+        self.down_until = 0.0
+        self.state = "closed"          # closed | open | half_open
+        self.last_error = None
+        self.last_ok_at = None         # wall-clock, for /proxy/health
+
+    def usable(self):
+        with self._lock:
+            now = time.monotonic()
+            if now < self.down_until:
+                return False
+            if self.state == "open":
+                self.state = "half_open"   # exactly one probe request allowed through
+            return True
+
+    def ok(self):
+        with self._lock:
+            self.consecutive_failures = 0
+            self.state = "closed"
+            self.last_error = None
+            self.last_ok_at = time.time()
+
+    def fail(self, message, retry_after=None):
+        """Record a failure and return the backoff (seconds) applied."""
+        with self._lock:
+            self.consecutive_failures += 1
+            backoff = min(self.base_backoff * (2 ** (self.consecutive_failures - 1)), self.max_backoff)
+            if retry_after:
+                backoff = max(backoff, min(float(retry_after), self.max_backoff))
+            tripped = self.consecutive_failures >= self.failure_threshold
+            if tripped or self.state != "closed":
+                # Either this run of failures just crossed the threshold, or a
+                # half-open probe failed -- in both cases, force the circuit open.
+                self.state = "open"
+                backoff = max(backoff, self.open_seconds)
+            self.last_error = message
+            self.down_until = time.monotonic() + backoff
+            print(f"[{self.name}] {message} — backing off {backoff:.0f}s "
+                  f"(circuit={self.state}, consecutive_failures={self.consecutive_failures})")
+            return backoff
+
+    def status(self):
+        with self._lock:
+            now = time.monotonic()
+            return {
+                "circuit": self.state,
+                "consecutive_failures": self.consecutive_failures,
+                "cooldown_seconds": max(0, round(self.down_until - now)),
+                "last_error": self.last_error,
+                "last_ok_seconds_ago": round(time.time() - self.last_ok_at) if self.last_ok_at else None,
+            }
+
+
+# ---------------------------------------------------------------------------
 # ADS-B providers (ADSBExchange v2 compatible)
 # ---------------------------------------------------------------------------
 PROVIDER_BASES = [
@@ -78,21 +177,25 @@ MIN_REQUEST_INTERVAL = float(os.environ.get("ADSB_MIN_INTERVAL", "1.1"))
 REQUEST_TIMEOUT = 8            # seconds; keep short so a dead provider fails fast
 LIVE_CACHE_TTL = 12            # radius / callsign results are this fresh
 TRACK_CACHE_TTL = 5            # single-aircraft polling on the detail page
-RATE_LIMIT_BACKOFF = 15        # provider cool-down after HTTP 429 (or its Retry-After)
-ERROR_BACKOFF = 30             # cool-down after 5xx / 403 / bad JSON
-UNREACHABLE_BACKOFF = 45       # cool-down after connect/read timeouts
+RATE_LIMIT_MIN_WAIT = 15       # floor used if a 429 has no (usable) Retry-After
 MAX_RADIUS_NM = 250
 TRACKED_MAX = 8                # tracked-list lookups per refresh (one request each)
 TRACKED_CACHE_TTL = 20
 
 # Route (departure/destination) lookups. Routes don't change mid-flight, so hits are
-# cached for hours; misses for a shorter time; failures back off so the page never stalls.
+# cached for hours; misses for a shorter time; failures go through the breaker below.
 ROUTE_API_URL = os.environ.get("ROUTE_API_URL", "https://hexdb.io").strip()  # hexdb.io: simple, documented, GET-only
 ROUTE_TIMEOUT = 6
 ROUTE_HIT_TTL = 6 * 3600
 ROUTE_MISS_TTL = 30 * 60
-ROUTE_FAIL_BACKOFF = 60
 AIRPORT_INFO_TTL = 30 * 24 * 3600  # airport lat/lon/name basically never changes
+
+# Aircraft photos (planespotters.net public API -- no key needed, but be a polite
+# client: cache aggressively and keep a photographer credit + link in the UI).
+PHOTO_API_URL = os.environ.get("PHOTO_API_URL", "https://api.planespotters.net/pub/photos/hex").strip()
+PHOTO_TIMEOUT = 6
+PHOTO_HIT_TTL = 24 * 3600
+PHOTO_MISS_TTL = 2 * 3600
 
 # ---- optional schedule API: AeroDataBox via RapidAPI free tier (600 units/month) ----
 SCHEDULE_API_HOST = os.environ.get("SCHEDULE_API_HOST", "aerodatabox.p.rapidapi.com")
@@ -100,6 +203,8 @@ SCHEDULE_API_KEY = os.environ.get("SCHEDULE_API_KEY", "")
 SCHEDULE_CACHE_TTL = 300  # 5 minutes -- the free tier is small, don't burn it
 _schedule_cache = {}
 _schedule_cache_lock = threading.Lock()
+schedule_breaker = CircuitBreaker("schedule", base_backoff=10, max_backoff=300,
+                                   failure_threshold=4, open_seconds=180)
 
 # ---------------------------------------------------------------------------
 # Busy hubs used to sample a region (each is queried with a 250 nm radius)
@@ -113,24 +218,98 @@ REGION_HUBS = {
 }
 
 # ---------------------------------------------------------------------------
-# Provider bookkeeping (per-host pacing, cool-downs, last error for /proxy/health)
+# Readable aircraft types: ICAO type designator -> human-friendly name.
+# Not exhaustive -- covers the airframes that show up on commercial routes most
+# often. Anything not in this table just falls back to showing the raw code.
+# ---------------------------------------------------------------------------
+AIRCRAFT_TYPES = {
+    # Airbus narrowbody
+    "A318": "Airbus A318", "A319": "Airbus A319", "A19N": "Airbus A319neo",
+    "A320": "Airbus A320", "A20N": "Airbus A320neo",
+    "A321": "Airbus A321", "A21N": "Airbus A321neo",
+    # Airbus widebody
+    "A306": "Airbus A300-600", "A310": "Airbus A310",
+    "A332": "Airbus A330-200", "A333": "Airbus A330-300",
+    "A338": "Airbus A330-800neo", "A339": "Airbus A330-900neo",
+    "A342": "Airbus A340-200", "A343": "Airbus A340-300",
+    "A345": "Airbus A340-500", "A346": "Airbus A340-600",
+    "A359": "Airbus A350-900", "A35K": "Airbus A350-1000",
+    "A388": "Airbus A380-800",
+    # Boeing narrowbody
+    "B712": "Boeing 717-200",
+    "B731": "Boeing 737-100", "B732": "Boeing 737-200", "B733": "Boeing 737-300",
+    "B734": "Boeing 737-400", "B735": "Boeing 737-500",
+    "B736": "Boeing 737-600", "B737": "Boeing 737-700", "B738": "Boeing 737-800", "B739": "Boeing 737-900",
+    "B37M": "Boeing 737 MAX 7", "B38M": "Boeing 737 MAX 8", "B39M": "Boeing 737 MAX 9", "B3XM": "Boeing 737 MAX 10",
+    # Boeing widebody
+    "B742": "Boeing 747-200", "B744": "Boeing 747-400", "B748": "Boeing 747-8",
+    "B752": "Boeing 757-200", "B753": "Boeing 757-300",
+    "B762": "Boeing 767-200", "B763": "Boeing 767-300", "B764": "Boeing 767-400",
+    "B772": "Boeing 777-200", "B77L": "Boeing 777-200LR", "B773": "Boeing 777-300", "B77W": "Boeing 777-300ER",
+    "B778": "Boeing 777-8", "B779": "Boeing 777-9",
+    "B788": "Boeing 787-8 Dreamliner", "B789": "Boeing 787-9 Dreamliner", "B78X": "Boeing 787-10 Dreamliner",
+    "MD11": "McDonnell Douglas MD-11", "MD80": "McDonnell Douglas MD-80", "MD82": "McDonnell Douglas MD-82",
+    "MD83": "McDonnell Douglas MD-83", "MD88": "McDonnell Douglas MD-88", "MD90": "McDonnell Douglas MD-90",
+    # Embraer
+    "E135": "Embraer ERJ 135", "E145": "Embraer ERJ 145", "E170": "Embraer E170",
+    "E75L": "Embraer E175", "E75S": "Embraer E175", "E190": "Embraer E190", "E195": "Embraer E195",
+    "E290": "Embraer E190-E2", "E295": "Embraer E195-E2",
+    # Bombardier / De Havilland
+    "CRJ1": "Bombardier CRJ100", "CRJ2": "Bombardier CRJ200", "CRJ7": "Bombardier CRJ700",
+    "CRJ9": "Bombardier CRJ900", "CRJX": "Bombardier CRJ1000",
+    "CL30": "Bombardier Challenger 300", "CL60": "Bombardier Challenger 600",
+    "GLEX": "Bombardier Global Express", "GL5T": "Bombardier Global 5000",
+    "DH8A": "De Havilland Dash 8-100", "DH8B": "De Havilland Dash 8-200",
+    "DH8C": "De Havilland Dash 8-300", "DH8D": "De Havilland Dash 8-400 (Q400)",
+    # ATR / regional turboprops
+    "AT43": "ATR 42-300", "AT45": "ATR 42-500", "AT72": "ATR 72", "AT76": "ATR 72-600",
+    "SF34": "Saab 340", "F50": "Fokker 50", "F70": "Fokker 70", "F100": "Fokker 100",
+    "DHC6": "De Havilland Twin Otter", "B350": "Beechcraft King Air 350",
+    # Russian / Ukrainian
+    "SU95": "Sukhoi Superjet 100", "A148": "Antonov An-148", "IL96": "Ilyushin Il-96",
+    "TU95": "Tupolev Tu-95", "TU204": "Tupolev Tu-204",
+    # Cargo / other widebody
+    "A124": "Antonov An-124", "A225": "Antonov An-225",
+    # Business jets
+    "GLF4": "Gulfstream G450", "GLF5": "Gulfstream G550", "GLF6": "Gulfstream G650",
+    "C25A": "Cessna Citation CJ2", "C25B": "Cessna Citation CJ3", "C25C": "Cessna Citation CJ4",
+    "C56X": "Cessna Citation Excel", "C680": "Cessna Citation Sovereign", "C750": "Cessna Citation X",
+    "LJ35": "Learjet 35", "LJ60": "Learjet 60", "FA7X": "Dassault Falcon 7X", "F2TH": "Dassault Falcon 2000",
+    "PC12": "Pilatus PC-12", "TBM9": "Daher TBM 900",
+    # Light aircraft / GA
+    "C172": "Cessna 172 Skyhawk", "C182": "Cessna 182 Skylane", "C208": "Cessna 208 Caravan",
+    "PA28": "Piper PA-28 Cherokee", "PA34": "Piper PA-34 Seneca", "SR22": "Cirrus SR22",
+    # Military / other (occasionally seen on ADS-B)
+    "C130": "Lockheed C-130 Hercules", "C17": "Boeing C-17 Globemaster III", "A400": "Airbus A400M Atlas",
+    "KC35": "Boeing KC-135 Stratotanker", "E3TF": "Boeing E-3 Sentry (AWACS)",
+    "H60": "Sikorsky UH-60 Black Hawk", "EC35": "Eurocopter EC135", "AS50": "Eurocopter AS350",
+}
+
+
+def readable_aircraft_type(icao_type_code):
+    if not icao_type_code:
+        return None
+    return AIRCRAFT_TYPES.get(icao_type_code.strip().upper())
+
+
+# ---------------------------------------------------------------------------
+# Provider bookkeeping (per-host pacing + shared CircuitBreaker)
 # ---------------------------------------------------------------------------
 class Provider:
     def __init__(self, base):
         self.base = base.rstrip("/")
         self.name = urllib.parse.urlparse(self.base).netloc or self.base
-        self._lock = threading.Lock()
+        self._pace_lock = threading.Lock()
         self.last_call = 0.0
-        self.down_until = 0.0
         self.last_status = None
-        self.last_error = None
-        self.last_ok_at = None  # wall-clock
+        self.breaker = CircuitBreaker(self.name, base_backoff=5, max_backoff=300,
+                                       failure_threshold=5, open_seconds=180)
 
     def usable(self):
-        return time.monotonic() >= self.down_until
+        return self.breaker.usable()
 
     def pace(self):
-        with self._lock:
+        with self._pace_lock:
             wait = MIN_REQUEST_INTERVAL - (time.monotonic() - self.last_call)
             if wait > 0:
                 time.sleep(wait)
@@ -138,15 +317,13 @@ class Provider:
 
     def mark_ok(self, status=200):
         self.last_status = status
-        self.last_error = None
-        self.last_ok_at = time.time()
+        self.breaker.ok()
 
-    def mark_fail(self, status, error, message, backoff):
+    def mark_fail(self, status, error, message, retry_after=None):
         self.last_status = status
-        self.last_error = message
-        self.down_until = time.monotonic() + backoff
-        print(f"[adsb] {self.name}: {message} (cooling down {backoff:.0f}s)")
-        return status, {"error": error, "message": f"{self.name}: {message}"}, True
+        backoff = self.breaker.fail(message, retry_after=retry_after)
+        full_message = f"{message} (retrying in ~{backoff:.0f}s)"
+        return status, {"error": error, "message": f"{self.name}: {full_message}"}, True
 
 
 PROVIDERS = [Provider(b) for b in PROVIDER_BASES]
@@ -186,27 +363,32 @@ def _try_provider(p, path):
         try:
             data = json.loads(raw.decode("utf-8"))
         except ValueError:
-            return p.mark_fail(502, "bad_response", "returned something that isn't JSON", ERROR_BACKOFF)
+            return p.mark_fail(502, "bad_response", "returned something that isn't JSON")
         p.mark_ok(200)
         return 200, data, False
     except urllib.error.HTTPError as e:
         if e.code == 429:
+            retry_after = None
             try:
-                delay = float(e.headers.get("Retry-After") or RATE_LIMIT_BACKOFF)
-            except ValueError:
-                delay = RATE_LIMIT_BACKOFF
-            return p.mark_fail(429, "rate_limited", "rate limited (HTTP 429)", min(max(delay, 5), 120))
+                retry_after = float(e.headers.get("Retry-After"))
+            except (TypeError, ValueError):
+                retry_after = None
+            # Retry-After is a floor, not the whole story -- mark_fail() combines it
+            # with the exponential schedule and takes whichever is longer.
+            return p.mark_fail(429, "rate_limited",
+                               "rate limited (HTTP 429)" + (f", server asked for {retry_after:.0f}s" if retry_after else ""),
+                               retry_after=retry_after or RATE_LIMIT_MIN_WAIT)
         if e.code in (401, 403):
             return p.mark_fail(502, "provider_refused",
-                               f"refused the request (HTTP {e.code}) - it may be blocking this server's IP", ERROR_BACKOFF)
+                               f"refused the request (HTTP {e.code}) - it may be blocking this server's IP")
         if e.code >= 500:
-            return p.mark_fail(502, "provider_error", f"server error (HTTP {e.code})", ERROR_BACKOFF)
+            return p.mark_fail(502, "provider_error", f"server error (HTTP {e.code})")
         # 404 / 400 etc: the provider is reachable, the query itself was rejected
         p.mark_ok(e.code)
         return e.code, {"error": "http_%d" % e.code, "message": f"{p.name}: HTTP {e.code} for {path}"}, False
     except (urllib.error.URLError, TimeoutError, OSError) as e:
         reason = getattr(e, "reason", e)
-        return p.mark_fail(504, "upstream_unreachable", f"unreachable ({reason})", UNREACHABLE_BACKOFF)
+        return p.mark_fail(504, "upstream_unreachable", f"unreachable ({reason})")
 
 
 def _adsb_request(path):
@@ -221,7 +403,7 @@ def _adsb_request(path):
         last = (status, payload)
     if last is not None:
         return last
-    cooling = ", ".join(p.name for p in PROVIDERS) or "none configured"
+    cooling = ", ".join(f"{p.name} ({p.breaker.status()['circuit']})" for p in PROVIDERS) or "none configured"
     return 504, {"error": "upstream_unreachable",
                  "message": f"All ADS-B providers are cooling down after errors ({cooling}). Retrying shortly."}
 
@@ -249,8 +431,8 @@ def _num(x):
 
 
 def ac_to_state(ac, now_s=None):
-    """Returns a 19-element list (17 OpenSky slots + registration + type) or None
-    if the aircraft has no usable position / identity."""
+    """Returns a 20-element list (17 OpenSky slots + registration, ICAO type code,
+    and human-readable type) or None if the aircraft has no usable position / identity."""
     lat, lon = _num(ac.get("lat")), _num(ac.get("lon"))
     hex_ = (ac.get("hex") or "").strip().lower()
     if lat is None or lon is None or not hex_ or hex_.startswith("~"):
@@ -279,6 +461,7 @@ def ac_to_state(ac, now_s=None):
     seen = _num(ac.get("seen"))
     callsign = (ac.get("flight") or "").strip() or None
     squawk = ac.get("squawk") or None
+    type_code = (ac.get("t") or None)
 
     return [
         hex_,                                                   # 0  icao24
@@ -299,7 +482,8 @@ def ac_to_state(ac, now_s=None):
         bool(ac.get("spi")),                                    # 15
         0,                                                      # 16 position source
         (ac.get("r") or None),                                  # 17 registration
-        (ac.get("t") or None),                                  # 18 aircraft type
+        type_code,                                              # 18 aircraft type (ICAO code)
+        readable_aircraft_type(type_code),                      # 19 aircraft type (human-readable)
     ]
 
 
@@ -395,8 +579,8 @@ _route_lock = threading.Lock()
 _airport_lock = threading.Lock()
 _route_pace_lock = threading.Lock()
 _route_last_call = [0.0]
-_route_down_until = [0.0]
-_route_last_error = [None]
+route_breaker = CircuitBreaker("route", base_backoff=10, max_backoff=300,
+                                failure_threshold=4, open_seconds=180)
 
 
 def _route_store(key, route, ttl):
@@ -408,45 +592,44 @@ def _route_store(key, route, ttl):
                 _route_cache.pop(k, None)
 
 
-def _route_fail(message):
-    _route_last_error[0] = message
-    _route_down_until[0] = time.monotonic() + ROUTE_FAIL_BACKOFF
-    print(f"[route] lookup failed: {message} (pausing route lookups {ROUTE_FAIL_BACKOFF}s)")
-    return "unavailable", None
-
-
-def _hexdb_pace():
-    with _route_pace_lock:
-        wait = MIN_REQUEST_INTERVAL - (time.monotonic() - _route_last_call[0])
+def _polite_pace(pace_lock, last_call_box):
+    with pace_lock:
+        wait = MIN_REQUEST_INTERVAL - (time.monotonic() - last_call_box[0])
         if wait > 0:
             time.sleep(wait)
-        _route_last_call[0] = time.monotonic()
+        last_call_box[0] = time.monotonic()
 
 
-def _hexdb_get(path):
-    """GET path from hexdb.io. Returns (status, parsed_json_or_None, error_message_or_None)."""
-    _hexdb_pace()
+def _http_get_json(base_url, path, timeout, user_agent=USER_AGENT):
+    """GET path from base_url. Returns (status, parsed_json_or_None, retry_after_or_None,
+    error_message_or_None). status 404 is reported cleanly (not an error -- "not found")."""
     req = urllib.request.Request(
-        ROUTE_API_URL + path,
-        headers={"Accept": "application/json", "User-Agent": USER_AGENT},
+        base_url + path,
+        headers={"Accept": "application/json", "User-Agent": user_agent},
     )
     try:
-        with urllib.request.urlopen(req, timeout=ROUTE_TIMEOUT) as resp:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
             raw = resp.read()
     except urllib.error.HTTPError as e:
         if e.code == 404:
-            return 404, None, None
+            return 404, None, None, None
+        retry_after = None
+        if e.code == 429:
+            try:
+                retry_after = float(e.headers.get("Retry-After"))
+            except (TypeError, ValueError):
+                retry_after = None
         if e.code == 429 or e.code >= 500:
             body_preview = e.read()[:200].decode("utf-8", errors="replace")
-            return e.code, None, f"HTTP {e.code}. Body preview: {body_preview!r}"
-        return e.code, None, f"HTTP {e.code}"
+            return e.code, None, retry_after, f"HTTP {e.code}. Body preview: {body_preview!r}"
+        return e.code, None, None, f"HTTP {e.code}"
     except (urllib.error.URLError, TimeoutError, OSError) as e:
-        return 0, None, str(getattr(e, "reason", e))
+        return 0, None, None, str(getattr(e, "reason", e))
     try:
-        return 200, json.loads(raw.decode("utf-8", errors="replace")), None
+        return 200, json.loads(raw.decode("utf-8", errors="replace")), None, None
     except ValueError as e:
         preview = raw[:200].decode("utf-8", errors="replace") if raw else "(empty body)"
-        return 200, None, f"response wasn't JSON ({e}). Body preview: {preview!r}"
+        return 200, None, None, f"response wasn't JSON ({e}). Body preview: {preview!r}"
 
 
 def _lookup_airport(icao):
@@ -459,10 +642,14 @@ def _lookup_airport(icao):
         hit = _airport_cache.get(icao)
     if hit and time.monotonic() <= hit[0]:
         return hit[1]
+    if not route_breaker.usable():
+        return None
 
-    status, data, err = _hexdb_get("/api/v1/airport/icao/" + urllib.parse.quote(icao))
+    _polite_pace(_route_pace_lock, _route_last_call)
+    status, data, retry_after, err = _http_get_json(ROUTE_API_URL, "/api/v1/airport/icao/" + urllib.parse.quote(icao), ROUTE_TIMEOUT)
     airport = None
     if status == 200 and isinstance(data, dict) and data.get("icao"):
+        route_breaker.ok()
         airport = {
             "icao": (data.get("icao") or "").upper() or None,
             "iata": (data.get("iata") or "").upper() or None,
@@ -472,8 +659,10 @@ def _lookup_airport(icao):
             "lon": _num(data.get("longitude")),
             "country": data.get("country_code") or None,
         }
-    elif status not in (200, 404) and err:
-        print(f"[route] airport lookup for {icao} failed: {err}")
+    elif status == 404:
+        route_breaker.ok()
+    elif err:
+        route_breaker.fail(f"airport lookup for {icao} failed: {err}", retry_after=retry_after)
     with _airport_lock:
         _airport_cache[icao] = (time.monotonic() + AIRPORT_INFO_TTL, airport)
     return airport
@@ -481,7 +670,7 @@ def _lookup_airport(icao):
 
 def lookup_route(callsign, lat, lon):
     """Returns (status, route). status is "ok" (route found), "none" (no route known for
-    this callsign) or "unavailable" (lookup disabled / failing right now).
+    this callsign) or "unavailable" (lookup disabled / breaker open / failing right now).
     lat/lon are accepted for API-compatibility with the old adsb.lol lookup but
     unused -- hexdb.io's route data isn't position-checked, so there's no
     "plausible" flag here; the client already treats that as optional."""
@@ -492,16 +681,20 @@ def lookup_route(callsign, lat, lon):
         hit = _route_cache.get(key)
     if hit and time.monotonic() <= hit[0]:
         return ("ok" if hit[1] else "none"), hit[1]
-    if time.monotonic() < _route_down_until[0]:
+    if not route_breaker.usable():
         return "unavailable", None
 
-    status, data, err = _hexdb_get("/api/v1/route/icao/" + urllib.parse.quote(key))
+    _polite_pace(_route_pace_lock, _route_last_call)
+    status, data, retry_after, err = _http_get_json(ROUTE_API_URL, "/api/v1/route/icao/" + urllib.parse.quote(key), ROUTE_TIMEOUT)
     if status == 404:
+        route_breaker.ok()
         _route_store(key, None, ROUTE_MISS_TTL)
         return "none", None
     if err:
-        return _route_fail(err)
+        route_breaker.fail(f"route lookup for {key} failed: {err}", retry_after=retry_after)
+        return "unavailable", None
     if not isinstance(data, dict) or "-" not in (data.get("route") or ""):
+        route_breaker.ok()
         _route_store(key, None, ROUTE_MISS_TTL)
         return "none", None
 
@@ -515,10 +708,71 @@ def lookup_route(callsign, lat, lon):
         _route_store(key, None, ROUTE_MISS_TTL)
         return "none", None
 
-    _route_last_error[0] = None
+    route_breaker.ok()
     route = {"origin": origin, "destination": destination, "via": [], "plausible": None}
     _route_store(key, route, ROUTE_HIT_TTL)
     return "ok", route
+
+
+# ---------------------------------------------------------------------------
+# Aircraft photos (planespotters.net public API)
+#   GET /pub/photos/hex/{icao24} -> {"photos":[{"thumbnail_large":{"src":...,
+#     "size":{"width":...,"height":...}},"link":...,"photographer":...}, ...]}
+#   404 / empty "photos" -> no photo on file for this airframe
+# planespotters.net asks that a credit + link back to the photographer accompany
+# any use of a photo; the client renders both next to the image.
+# ---------------------------------------------------------------------------
+_photo_cache = {}
+_photo_lock = threading.Lock()
+_photo_pace_lock = threading.Lock()
+_photo_last_call = [0.0]
+photo_breaker = CircuitBreaker("photo", base_backoff=10, max_backoff=300,
+                                failure_threshold=4, open_seconds=180)
+
+
+def lookup_photo(icao24):
+    """Returns (status, photo). status is "ok", "none", or "unavailable"."""
+    if not PHOTO_API_URL or not icao24:
+        return "unavailable", None
+    icao24 = icao24.lower()
+    with _photo_lock:
+        hit = _photo_cache.get(icao24)
+    if hit and time.monotonic() <= hit[0]:
+        return ("ok" if hit[1] else "none"), hit[1]
+    if not photo_breaker.usable():
+        return "unavailable", None
+
+    _polite_pace(_photo_pace_lock, _photo_last_call)
+    status, data, retry_after, err = _http_get_json(PHOTO_API_URL, "/" + urllib.parse.quote(icao24), PHOTO_TIMEOUT)
+    if status == 404:
+        photo_breaker.ok()
+        with _photo_lock:
+            _photo_cache[icao24] = (time.monotonic() + PHOTO_MISS_TTL, None)
+        return "none", None
+    if err:
+        photo_breaker.fail(f"photo lookup for {icao24} failed: {err}", retry_after=retry_after)
+        return "unavailable", None
+
+    photo_breaker.ok()
+    photos = (data or {}).get("photos") or []
+    if not photos:
+        with _photo_lock:
+            _photo_cache[icao24] = (time.monotonic() + PHOTO_MISS_TTL, None)
+        return "none", None
+
+    p0 = photos[0]
+    thumb = p0.get("thumbnail_large") or p0.get("thumbnail") or {}
+    size = thumb.get("size") if isinstance(thumb.get("size"), dict) else {}
+    photo = {
+        "url": thumb.get("src"),
+        "width": size.get("width"),
+        "height": size.get("height"),
+        "photographer": p0.get("photographer"),
+        "link": p0.get("link"),
+    }
+    with _photo_lock:
+        _photo_cache[icao24] = (time.monotonic() + PHOTO_HIT_TTL, photo)
+    return "ok", photo
 
 
 class Handler(http.server.SimpleHTTPRequestHandler):
@@ -537,6 +791,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self.proxy_flight(qs)
         elif parsed.path == "/proxy/route":
             self.proxy_route(qs)
+        elif parsed.path == "/proxy/photo":
+            self.proxy_photo(qs)
         elif parsed.path == "/proxy/health":
             self.proxy_health()
         elif parsed.path == "/favicon.ico":
@@ -639,24 +895,26 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             return
         status, route = lookup_route(callsign, lat, lon)
         self._send_json(200, json.dumps({"status": status, "route": route,
-                                         "source": "adsb.lol"}).encode())
+                                         "source": "hexdb.io"}).encode())
+
+    # ---------------- aircraft photo ----------------
+    def proxy_photo(self, qs):
+        icao24 = re.sub(r"[^0-9a-fA-F]", "", (qs.get("icao24", [""])[0] or "").strip())
+        if not icao24:
+            self._send_json(400, json.dumps({"error": "icao24 required"}).encode())
+            return
+        status, photo = lookup_photo(icao24)
+        self._send_json(200, json.dumps({"status": status, "photo": photo,
+                                         "source": "planespotters.net"}).encode())
 
     def proxy_health(self):
-        now = time.monotonic()
-        info = [{
-            "provider": p.name,
-            "usable": p.usable(),
-            "cooldown_seconds": max(0, round(p.down_until - now)),
-            "last_status": p.last_status,
-            "last_error": p.last_error,
-            "last_ok_seconds_ago": round(time.time() - p.last_ok_at) if p.last_ok_at else None,
-        } for p in PROVIDERS]
-        route_info = {
-            "enabled": bool(ROUTE_API_URL),
-            "cooldown_seconds": max(0, round(_route_down_until[0] - now)),
-            "last_error": _route_last_error[0],
-        }
-        self._send_json(200, json.dumps({"providers": info, "route_lookup": route_info}, indent=2).encode())
+        info = [{"provider": p.name, **p.breaker.status()} for p in PROVIDERS]
+        self._send_json(200, json.dumps({
+            "providers": info,
+            "route_lookup": {"enabled": bool(ROUTE_API_URL), **route_breaker.status()},
+            "photo_lookup": {"enabled": bool(PHOTO_API_URL), **photo_breaker.status()},
+            "schedule_lookup": {"enabled": bool(SCHEDULE_API_KEY), **schedule_breaker.status()},
+        }, indent=2).encode())
 
     def _send_upstream_error(self, status, payload):
         code = 429 if status == 429 else (504 if status == 504 else 502)
@@ -667,7 +925,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
     def _try_schedule_api(self, prefix, flight_number_hint):
         """Ask AeroDataBox for this flight's schedule/status. Returns a dict shaped
         like the client expects ({"status": "scheduled"/"landed", "flight": {...}}),
-        or None to fall through (no key configured, no record, or the lookup failed)."""
+        or None to fall through (no key configured, breaker open, no record, or the
+        lookup failed)."""
         if not SCHEDULE_API_KEY or not SCHEDULE_API_HOST:
             return None
 
@@ -681,22 +940,30 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             hit = _schedule_cache.get(cache_key)
         if hit and time.monotonic() < hit[0]:
             flights = hit[1]
+        elif not schedule_breaker.usable():
+            return None
         else:
             url = f"https://{SCHEDULE_API_HOST}/flights/number/{urllib.parse.quote(number)}"
             headers = {
                 "X-RapidAPI-Key": SCHEDULE_API_KEY,
                 "X-RapidAPI-Host": SCHEDULE_API_HOST,
             }
+            flights = None
             try:
                 req = urllib.request.Request(url, headers=headers)
                 with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT) as resp:
                     flights = json.loads(resp.read().decode("utf-8"))
+                schedule_breaker.ok()
             except urllib.error.HTTPError as e:
-                print(f"[aerodatabox] HTTP {e.code} for {number}: {e.read()[:200]}")
-                flights = None
+                retry_after = None
+                if e.code == 429:
+                    try:
+                        retry_after = float(e.headers.get("Retry-After"))
+                    except (TypeError, ValueError):
+                        retry_after = None
+                schedule_breaker.fail(f"HTTP {e.code} for {number}", retry_after=retry_after)
             except Exception as e:
-                print(f"[aerodatabox] request failed for {number}: {e}")
-                flights = None
+                schedule_breaker.fail(f"request failed for {number}: {e}")
             with _schedule_cache_lock:
                 _schedule_cache[cache_key] = (time.monotonic() + SCHEDULE_CACHE_TTL, flights)
 

@@ -9,6 +9,11 @@
   <link
     href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=Manrope:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500&display=swap"
     rel="stylesheet">
+  <!-- Leaflet: real map tiles for the mini map + detail-page live map -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+    integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+    integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
   <style>
     :root {
       --paper: #FBF8F4;
@@ -392,15 +397,65 @@
       border-radius: 16px;
       overflow: hidden;
       border: 1px solid var(--line);
-      background: var(--radar-bg);
+      background: var(--line);
       height: 180px;
       position: relative;
     }
 
-    .fc-mini-map canvas {
-      display: block;
+    .fc-mini-map>div {
       width: 100%;
       height: 100%;
+    }
+
+    /* ---------- aircraft photo ---------- */
+    .fc-photo {
+      margin-top: 20px;
+      border-radius: 16px;
+      overflow: hidden;
+      border: 1px solid var(--line);
+      background: var(--paper);
+    }
+
+    .fc-photo img {
+      display: block;
+      width: 100%;
+      max-height: 280px;
+      object-fit: cover;
+    }
+
+    .fc-photo-credit {
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 8px 14px;
+      font-size: 11px;
+      color: var(--ink-faint);
+    }
+
+    .fc-photo-credit a {
+      color: var(--sunset-deep);
+      font-weight: 700;
+      text-decoration: none;
+    }
+
+    .fc-photo-credit a:hover {
+      text-decoration: underline;
+    }
+
+    /* ---------- plane marker used on the Leaflet maps ---------- */
+    .plane-divicon {
+      background: none;
+      border: none;
+    }
+
+    .plane-divicon .arrow {
+      display: inline-block;
+      filter: drop-shadow(0 1px 2px rgba(27, 35, 51, .45));
+    }
+
+    .route-dot {
+      background: none;
+      border: none;
     }
 
     .fc-actions {
@@ -597,13 +652,12 @@
       border-radius: 18px;
       overflow: hidden;
       border: 1px solid var(--line);
-      background: var(--radar-bg);
+      background: var(--line);
       height: 320px;
       position: relative;
     }
 
-    .detail-map-holder canvas {
-      display: block;
+    .detail-map-holder>div {
       width: 100%;
       height: 100%;
     }
@@ -612,11 +666,16 @@
       position: absolute;
       top: 12px;
       left: 14px;
+      z-index: 500;
       font-family: 'IBM Plex Mono', monospace;
       font-size: 10.5px;
-      color: #6C86A8;
+      color: #fff;
+      background: rgba(14, 20, 32, .65);
+      padding: 4px 9px;
+      border-radius: 999px;
       letter-spacing: .4px;
       text-transform: uppercase;
+      pointer-events: none;
     }
 
     .detail-grid {
@@ -813,6 +872,7 @@
       color: var(--ink-faint);
       margin-top: 8px;
     }
+
     .progress-wrap {
       margin-top: 18px;
     }
@@ -1233,6 +1293,7 @@
           if (!target) return;
           target.innerHTML = routeStripHtml(route) + `<div id="${holderId}-progress"></div>`;
           refreshProgress(holderId, callsign, s);
+          if (holderId === 'detailRouteHolder') applyRouteToDetailMap(route);
         };
         if (Object.prototype.hasOwnProperty.call(routeCache, callsign)) {
           render(routeCache[callsign]);
@@ -1302,6 +1363,14 @@
           '2000': 'No code assigned yet (Europe)'
         };
         return notes[code] || 'Assigned by air traffic control';
+      }
+
+      // s[18] = ICAO type code (e.g. "A320"), s[19] = human-readable name from the
+      // server's type table (e.g. "Airbus A320"), when recognized.
+      function aircraftTypeLabel(s) {
+        const code = s[18] || null, name = s[19] || null;
+        if (name) return code ? `${name} (${code})` : name;
+        return code || '—';
       }
 
       // ============================================================
@@ -1491,7 +1560,8 @@
           <div class="fc-stat"><div class="label">Speed</div><div class="val">${kmh != null ? kmh + ' km/h' : '—'}</div></div>
           <div class="fc-stat"><div class="label">Heading</div><div class="val">${s[10] != null ? Math.round(s[10]) + '°' : '—'}</div></div>
         </div>
-        <div class="fc-mini-map"><canvas id="miniMap"></canvas></div>
+        <div class="fc-mini-map"><div id="miniMap"></div></div>
+        <div id="photoHolder"></div>
         <div class="fc-actions">
           <button class="fc-btn primary" id="detailBtn">Full details & live map →</button>
           <button class="fc-btn ${isSaved ? 'saved' : ''}" id="saveBtn">${isSaved ? '★ Tracking' : '☆ Track this flight'}</button>
@@ -1500,8 +1570,9 @@
         <div class="fc-updated">Updated just now · position data via adsb.lol</div>
       </div>
     `;
-        drawMiniMap('miniMap', lat, lon, s[10] || 0);
+        renderMiniMap(lat, lon, s[10] || 0);
         loadRoute('routeHolder', callsign, s);
+        loadPhoto('photoHolder', s[0]);
 
         document.getElementById('detailBtn').onclick = () => openDetail(callsign, parsed, s);
         document.getElementById('saveBtn').onclick = () => {
@@ -1518,88 +1589,97 @@
         };
       }
 
-      function drawMiniMap(canvasId, lat, lon, heading, trail) {
-        const canvas = document.getElementById(canvasId);
-        if (!canvas) return;
-        const rect = canvas.parentElement.getBoundingClientRect();
-        canvas.width = rect.width * devicePixelRatio; canvas.height = rect.height * devicePixelRatio;
-        canvas.style.width = rect.width + 'px'; canvas.style.height = rect.height + 'px';
-        const ctx = canvas.getContext('2d');
-        // simple local equirectangular window centered on the aircraft (+/- span deg)
-        const span = 15;
-        function project(la, lo) {
-          const x = ((lo - (lon - span)) / (span * 2)) * canvas.width;
-          const y = canvas.height - ((la - (lat - span)) / (span * 2)) * canvas.height;
-          return [x, y];
-        }
-        ctx.strokeStyle = 'rgba(61,255,154,0.08)'; ctx.lineWidth = 1;
-        for (let i = 0; i <= 8; i++) {
-          const x = i * canvas.width / 8; ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, canvas.height); ctx.stroke();
-          const y = i * canvas.height / 8; ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(canvas.width, y); ctx.stroke();
-        }
-        // nearby airports as small dots
-        AIRPORTS.forEach(([code, city, alat, alon]) => {
-          if (Math.abs(alat - lat) < span && Math.abs(alon - lon) < span) {
-            const [x, y] = project(alat, alon);
-            ctx.fillStyle = '#5A6C87'; ctx.beginPath(); ctx.arc(x, y, 3, 0, 7); ctx.fill();
-            ctx.fillStyle = '#8CA0BC'; ctx.font = (11 * devicePixelRatio) + 'px Manrope, sans-serif';
-            ctx.fillText(city, x + 7, y + 4);
-          }
+      // ---------- real map tiles (Leaflet + OpenStreetMap) ----------
+      const TILE_URL = 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png';
+      const TILE_ATTRIBUTION = '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors';
+
+      function planeIcon(heading, size) {
+        size = size || 22;
+        return L.divIcon({
+          className: 'plane-divicon',
+          html: `<span class="arrow" style="font-size:${size}px;line-height:1;display:inline-block;transform:rotate(${Math.round(heading || 0)}deg);">✈</span>`,
+          iconSize: [size, size],
+          iconAnchor: [size / 2, size / 2],
         });
-        // flight trail, if we have one (detail page live tracking)
-        if (trail && trail.length > 1) {
-          ctx.strokeStyle = 'rgba(255,106,77,0.55)'; ctx.lineWidth = 2;
-          ctx.beginPath();
-          trail.forEach(([tla, tlo], i) => {
-            const [x, y] = project(tla, tlo);
-            if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
-          });
-          ctx.stroke();
-        }
-        const [x, y] = project(lat, lon);
-        ctx.save(); ctx.translate(x, y); ctx.rotate(heading * Math.PI / 180);
-        ctx.fillStyle = '#FF6A4D';
-        ctx.beginPath(); ctx.moveTo(0, -9); ctx.lineTo(6, 7); ctx.lineTo(-6, 7); ctx.closePath(); ctx.fill();
-        ctx.restore();
+      }
+      function routeDotIcon() {
+        return L.divIcon({
+          className: 'route-dot',
+          html: '<div style="width:9px;height:9px;border-radius:50%;background:#3D63DD;border:2px solid #fff;box-shadow:0 0 0 1px rgba(61,99,221,.45);"></div>',
+          iconSize: [9, 9], iconAnchor: [4, 4],
+        });
       }
 
-      function drawRouteMap(canvasId, dep, arr) {
-        const canvas = document.getElementById(canvasId);
-        if (!canvas) return;
-        const rect = canvas.parentElement.getBoundingClientRect();
-        canvas.width = rect.width * devicePixelRatio; canvas.height = rect.height * devicePixelRatio;
-        canvas.style.width = rect.width + 'px'; canvas.style.height = rect.height + 'px';
-        const ctx = canvas.getContext('2d');
-        ctx.strokeStyle = 'rgba(61,255,154,0.06)';
-        for (let i = 0; i <= 10; i++) {
-          const x = i * canvas.width / 10; ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, canvas.height); ctx.stroke();
-        }
-        if (!dep.lat || !arr.lat) {
-          ctx.fillStyle = '#6C86A8'; ctx.font = (13 * devicePixelRatio) + 'px Manrope, sans-serif';
-          ctx.textAlign = 'center';
-          ctx.fillText('Route map unavailable for this airport pair', canvas.width / 2, canvas.height / 2);
+      let miniMap = null, miniMapMarker = null;
+      function renderMiniMap(lat, lon, heading) {
+        const el = document.getElementById('miniMap');
+        if (!el || typeof L === 'undefined') return;
+        if (miniMap) { miniMap.remove(); miniMap = null; miniMapMarker = null; }
+        miniMap = L.map(el, { zoomControl: false, scrollWheelZoom: false, doubleClickZoom: false, attributionControl: true }).setView([lat, lon], 6);
+        L.tileLayer(TILE_URL, { maxZoom: 18, attribution: TILE_ATTRIBUTION }).addTo(miniMap);
+        miniMapMarker = L.marker([lat, lon], { icon: planeIcon(heading, 22) }).addTo(miniMap);
+      }
+
+      let detailMap = null, detailMapMarker = null, detailMapTrail = null;
+      let detailOriginMarker = null, detailDestMarker = null, detailRouteLine = null;
+      function renderDetailMap(lat, lon, heading) {
+        const el = document.getElementById('detailMap');
+        if (!el || typeof L === 'undefined') return;
+        if (detailMap) { detailMap.remove(); detailMap = null; }
+        detailMapMarker = null; detailMapTrail = null;
+        detailOriginMarker = null; detailDestMarker = null; detailRouteLine = null;
+        detailMap = L.map(el, { zoomControl: false, scrollWheelZoom: true, attributionControl: true }).setView([lat, lon], 7);
+        L.control.zoom({ position: 'topright' }).addTo(detailMap);
+        L.tileLayer(TILE_URL, { maxZoom: 18, attribution: TILE_ATTRIBUTION }).addTo(detailMap);
+        detailMapMarker = L.marker([lat, lon], { icon: planeIcon(heading, 26) }).addTo(detailMap);
+        detailMapTrail = L.polyline([[lat, lon]], { color: '#FF6A4D', weight: 3, opacity: .8 }).addTo(detailMap);
+        applyRouteToDetailMap(routeCache[currentDetailCallsign] || null);
+      }
+      function updateDetailMap(lat, lon, heading, trailPoints) {
+        if (!detailMap) { renderDetailMap(lat, lon, heading); return; }
+        if (detailMapMarker) detailMapMarker.setLatLng([lat, lon]).setIcon(planeIcon(heading, 26));
+        if (detailMapTrail && trailPoints) detailMapTrail.setLatLngs(trailPoints);
+        detailMap.panTo([lat, lon], { animate: true });
+      }
+      function applyRouteToDetailMap(route) {
+        if (!detailMap) return;
+        if (detailOriginMarker) { detailMap.removeLayer(detailOriginMarker); detailOriginMarker = null; }
+        if (detailDestMarker) { detailMap.removeLayer(detailDestMarker); detailDestMarker = null; }
+        if (detailRouteLine) { detailMap.removeLayer(detailRouteLine); detailRouteLine = null; }
+        if (!route || !route.origin || !route.destination || route.origin.lat == null || route.destination.lat == null) return;
+        detailOriginMarker = L.marker([route.origin.lat, route.origin.lon], { icon: routeDotIcon() })
+          .addTo(detailMap).bindTooltip(route.origin.city || route.origin.iata || 'Departure');
+        detailDestMarker = L.marker([route.destination.lat, route.destination.lon], { icon: routeDotIcon() })
+          .addTo(detailMap).bindTooltip(route.destination.city || route.destination.iata || 'Destination');
+        detailRouteLine = L.polyline(
+          [[route.origin.lat, route.origin.lon], [route.destination.lat, route.destination.lon]],
+          { color: '#3D63DD', weight: 2, opacity: .55, dashArray: '6 8' }
+        ).addTo(detailMap);
+      }
+
+      // ---------- aircraft photo (planespotters.net, via the server proxy) ----------
+      const photoCache = {}; // icao24 -> photo object or null (this browser session only)
+      function photoBlockHtml(photo) {
+        if (!photo || !photo.url) return '';
+        const credit = photo.photographer ? `Photo © ${escapeHtml(photo.photographer)}` : 'Photo via planespotters.net';
+        const linkHref = photo.link || 'https://www.planespotters.net';
+        return `<div class="fc-photo"><img src="${escapeHtml(photo.url)}" alt="Photo of this airframe" loading="lazy">
+          <div class="fc-photo-credit"><span>${credit}</span><a href="${escapeHtml(linkHref)}" target="_blank" rel="noopener">planespotters.net</a></div></div>`;
+      }
+      async function loadPhoto(holderId, icao24) {
+        const holder = document.getElementById(holderId);
+        if (!holder || !icao24) return;
+        if (Object.prototype.hasOwnProperty.call(photoCache, icao24)) {
+          holder.innerHTML = photoBlockHtml(photoCache[icao24]);
           return;
         }
-        const pad = 0.15;
-        const lamin = Math.min(dep.lat, arr.lat), lamax = Math.max(dep.lat, arr.lat);
-        const lomin = Math.min(dep.lon, arr.lon), lomax = Math.max(dep.lon, arr.lon);
-        const laSpan = Math.max(lamax - lamin, 4) * (1 + pad * 2);
-        const loSpan = Math.max(lomax - lomin, 4) * (1 + pad * 2);
-        const laMid = (lamin + lamax) / 2, loMid = (lomin + lomax) / 2;
-        function project(la, lo) {
-          const x = ((lo - (loMid - loSpan / 2)) / loSpan) * canvas.width;
-          const y = canvas.height - ((la - (laMid - laSpan / 2)) / laSpan) * canvas.height;
-          return [x, y];
-        }
-        const [dx, dy] = project(dep.lat, dep.lon);
-        const [ax, ay] = project(arr.lat, arr.lon);
-        ctx.strokeStyle = 'rgba(255,106,77,0.6)'; ctx.lineWidth = 2; ctx.setLineDash([6, 6]);
-        ctx.beginPath(); ctx.moveTo(dx, dy); ctx.lineTo(ax, ay); ctx.stroke(); ctx.setLineDash([]);
-        [[dx, dy, dep.city], [ax, ay, arr.city]].forEach(([x, y, label]) => {
-          ctx.fillStyle = '#3DFF9A'; ctx.beginPath(); ctx.arc(x, y, 5, 0, 7); ctx.fill();
-          ctx.fillStyle = '#DDE6F0'; ctx.font = (12 * devicePixelRatio) + 'px Manrope, sans-serif';
-          ctx.textAlign = 'center'; ctx.fillText(label, x, y - 12);
-        });
+        try {
+          const data = await getJson('/proxy/photo?icao24=' + encodeURIComponent(icao24));
+          const photo = data.status === 'ok' ? data.photo : null;
+          photoCache[icao24] = photo;
+          const target = document.getElementById(holderId);
+          if (target) target.innerHTML = photoBlockHtml(photo);
+        } catch (e) { /* enrichment only: never break the card if the photo lookup fails */ }
       }
 
       // ---------- trending chips ----------
@@ -1622,10 +1702,10 @@
           if (picks.length === 0) {
             trendingChips.innerHTML = '<span style="font-size:12px;color:var(--ink-faint);">No recognizable airline flights loaded yet — try searching directly.</span>';
           }
-          bgRateLimited = 0;
+          bgOk();
         } catch (e) {
           if (e instanceof RateLimitError) {
-            bgRateLimited = Math.min(bgRateLimited + 1, 5);
+            bgFail();
             trendingChips.innerHTML = '<span style="font-size:12px;color:var(--ink-faint);">The flight data source is busy or unreachable right now — trending flights will reappear once it recovers.</span>';
           } else { console.error(e); }
         }
@@ -1692,10 +1772,10 @@
             const loc = describeLocation(match[6], match[5]);
             row.textContent = cls === 'ground' ? `on the ground, ${loc}` : `${{ climb: 'climbing', descend: 'descending', cruise: 'cruising' }[cls]}, ${loc}`;
           });
-          bgRateLimited = 0;
+          bgOk();
         } catch (e) {
           if (e instanceof RateLimitError) {
-            bgRateLimited = Math.min(bgRateLimited + 1, 5);
+            bgFail();
             trackedList.querySelectorAll('.tr-status').forEach(row => { row.textContent = 'data source busy — will retry shortly'; });
           }
         }
@@ -1704,9 +1784,18 @@
       searchBtn.addEventListener('click', () => runSearch(searchInput.value));
       searchInput.addEventListener('keydown', e => { if (e.key === 'Enter') runSearch(searchInput.value); });
 
-      // shared: track two consecutive rate-limit hits so background pollers can
-      // quietly back off instead of retrying into the same throttle
-      let bgRateLimited = 0;
+      // shared: every background poller (trending chips, tracked list, detail-page
+      // live map, explore radar) reports into the same failure streak, since they're
+      // all ultimately hitting the same proxy / upstream ADS-B provider. Each
+      // consecutive failure doubles the next wait (capped), so a struggling
+      // dependency gets backed off from quickly instead of every poller hammering
+      // it on its own fixed interval; one success anywhere resets the streak.
+      let bgFailureStreak = 0;
+      function bgOk() { bgFailureStreak = 0; }
+      function bgFail() { bgFailureStreak = Math.min(bgFailureStreak + 1, 8); }
+      function bgDelay(base, max) {
+        return bgFailureStreak > 0 ? Math.min(base * Math.pow(2, bgFailureStreak - 1), max) : base;
+      }
 
       // ============================================================
       // DETAIL VIEW — full info + live-updating map for one flight
@@ -1716,15 +1805,17 @@
       let detailPoll = null;
       let detailTrail = [];
       let detailIcao24 = null;
+      let currentDetailCallsign = null;
 
       function closeDetail() {
         clearTimeout(detailPoll); detailPoll = null;
-        detailTrail = []; detailIcao24 = null;
+        detailTrail = []; detailIcao24 = null; currentDetailCallsign = null;
       }
 
       function openDetail(callsign, parsed, initialState) {
         detailTrail = [];
         detailIcao24 = initialState[0];
+        currentDetailCallsign = callsign;
         showView('detail');
         renderDetailFrame(callsign, parsed, initialState);
         pollDetail(callsign, parsed);
@@ -1757,8 +1848,9 @@
         <div id="detailRouteHolder"></div>
         <div class="detail-map-holder">
           <span class="detail-map-label">Live position · updates every 8s</span>
-          <canvas id="detailMap"></canvas>
+          <div id="detailMap"></div>
         </div>
+        <div id="detailPhotoHolder"></div>
         <div class="detail-grid">
           <div class="fc-stat"><div class="label">Altitude</div><div class="val">${altFt != null ? altFt.toLocaleString() + ' ft' : '—'}</div></div>
           <div class="fc-stat"><div class="label">Altitude (m)</div><div class="val">${altM != null ? altM.toLocaleString() + ' m' : '—'}</div></div>
@@ -1768,7 +1860,8 @@
           <div class="fc-stat"><div class="label">Vertical rate</div><div class="val">${vrFtMin != null ? (vrFtMin > 0 ? '+' : '') + vrFtMin.toLocaleString() + ' ft/min' : '—'}</div></div>
           <div class="fc-stat"><div class="label">Squawk</div><div class="val">${s[14] || '—'}</div><div class="route-note" style="margin-top:4px;">${squawkNote(s[14])}</div></div>
           <div class="fc-stat"><div class="label">ICAO24 (hex)</div><div class="val" style="font-size:15px;">${(s[0] || '—').toUpperCase()}</div></div>
-          <div class="fc-stat"><div class="label">Registration · type</div><div class="val" style="font-size:15px;">${s[17] || '—'}${s[18] ? ' · ' + s[18] : ''}</div></div>
+          <div class="fc-stat"><div class="label">Registration</div><div class="val" style="font-size:15px;">${s[17] || '—'}</div></div>
+          <div class="fc-stat"><div class="label">Aircraft type</div><div class="val" style="font-size:15px;">${aircraftTypeLabel(s)}</div></div>
         </div>
         <div class="fc-actions">
           <button class="fc-btn ${isSaved ? 'saved' : ''}" id="detailSaveBtn">${isSaved ? '★ Tracking' : '☆ Track this flight'}</button>
@@ -1777,7 +1870,9 @@
         <div class="fc-updated" id="detailUpdated">Updated just now · position data via adsb.lol</div>
       </div>`;
 
+        renderDetailMap(s[6], s[5], s[10] || 0);
         loadRoute('detailRouteHolder', callsign, s);
+        loadPhoto('detailPhotoHolder', s[0]);
         document.getElementById('detailSaveBtn').onclick = () => {
           toggleTracked(callsign);
           renderDetailFrame(callsign, parsed, s);
@@ -1803,7 +1898,7 @@
         }
         detailTrail.push([lat, lon]);
         if (detailTrail.length > 60) detailTrail.shift();
-        drawMiniMap('detailMap', lat, lon, s[10] || 0, detailTrail);
+        updateDetailMap(lat, lon, s[10] || 0, detailTrail);
         refreshProgress('detailRouteHolder', callsign, s);
         const shareBtn = document.getElementById('detailShareBtn');
         if (shareBtn) {
@@ -1823,19 +1918,19 @@
           if (s) {
             updateDetailDynamic(callsign, s);
             if (updatedEl) updatedEl.textContent = 'Updated just now · position data via adsb.lol';
-            bgRateLimited = 0;
+            bgOk();
           } else if (updatedEl) {
             updatedEl.textContent = "Lost live signal — it may have landed. Use the search box to check its landing status.";
           }
         } catch (e) {
           if (e instanceof RateLimitError) {
-            bgRateLimited = Math.min(bgRateLimited + 1, 5);
+            bgFail();
             const updatedEl = document.getElementById('detailUpdated');
             if (updatedEl) updatedEl.textContent = 'Data source busy — backing off…';
           }
           /* keep last good frame, try again next tick */
         }
-        detailPoll = setTimeout(() => pollDetail(callsign, parsed), bgRateLimited > 0 ? 25000 : 8000);
+        detailPoll = setTimeout(() => pollDetail(callsign, parsed), bgDelay(8000, 120000));
       }
 
       detailBack.addEventListener('click', () => {
@@ -1913,17 +2008,17 @@
           exploreStates = await fetchStates(REGIONS[exploreRegion], exploreRegion);
           exploreStatus.textContent = exploreStates.length + ' aircraft live';
           drawScope(); renderExploreList();
-          bgRateLimited = 0;
+          bgOk();
         } catch (e) {
           if (e instanceof RateLimitError) {
-            bgRateLimited = Math.min(bgRateLimited + 1, 5);
+            bgFail();
             exploreStatus.textContent = 'data source busy — backing off…';
           } else {
             exploreStatus.textContent = 'offline — is server.py running?';
           }
         }
         clearTimeout(explorePoll);
-        explorePoll = setTimeout(pollExplore, bgRateLimited > 0 ? 60000 : 25000);
+        explorePoll = setTimeout(pollExplore, bgDelay(25000, 300000));
       }
       document.querySelectorAll('.region-btn').forEach(btn => {
         btn.addEventListener('click', () => {
@@ -1959,7 +2054,7 @@
       loadTrending();
       renderTrackedList();
       (function scheduleTrackedRefresh() {
-        setTimeout(() => { renderTrackedList().finally(scheduleTrackedRefresh); }, bgRateLimited > 0 ? 90000 : 45000);
+        setTimeout(() => { renderTrackedList().finally(scheduleTrackedRefresh); }, bgDelay(45000, 300000));
       })();
     })();
   </script>

@@ -41,6 +41,13 @@
       --radius-md: calc(var(--radius) - 2px);
       --radius-lg: var(--radius);
       --radius-xl: calc(var(--radius) + 6px);
+      --card-foreground: var(--foreground);
+      --primary-foreground: #FFFFFF;
+      --radius: 1rem;
+      --radius-sm: calc(var(--radius) - 6px);
+      --radius-md: calc(var(--radius) - 2px);
+      --radius-lg: var(--radius);
+      --radius-xl: calc(var(--radius) + 6px);
     }
 
     :root[data-theme="dark"] {
@@ -66,10 +73,21 @@
       --radius-md: calc(var(--radius) - 2px);
       --radius-lg: var(--radius);
       --radius-xl: calc(var(--radius) + 6px);
+      --card-foreground: var(--foreground);
+      --primary-foreground: #FFFFFF;
+      --radius: 1rem;
+      --radius-sm: calc(var(--radius) - 6px);
+      --radius-md: calc(var(--radius) - 2px);
+      --radius-lg: var(--radius);
+      --radius-xl: calc(var(--radius) + 6px);
     }
 
     * {
       box-sizing: border-box;
+    }
+
+    .lucide {
+      flex-shrink: 0;
     }
 
     .lucide {

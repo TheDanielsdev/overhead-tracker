@@ -36,6 +36,25 @@
       --radar-green: #3DFF9A;
     }
 
+    :root[data-theme="dark"] {
+      --paper: #12151F;
+      --card: #191D2A;
+      --ink: #ECEEF5;
+      --ink-soft: #A6ACC2;
+      --ink-faint: #6C7审189;
+      --ink-faint: #6C7189;
+      --line: #2A2F41;
+      --sunset: #FF7A5C;
+      --sunset-deep: #FF6A4D;
+      --sky: #6E8CFF;
+      --sky-soft: #1E2540;
+      --good: #35C793;
+      --good-soft: #123327;
+      --amber: #F0BB5C;
+      --amber-soft: #332A11;
+      --alert: #FF6B5E;
+    }
+
     * {
       box-sizing: border-box;
     }
@@ -54,6 +73,7 @@
       display: flex;
       flex-direction: column;
       min-height: 100vh;
+      transition: background .2s, color .2s;
     }
 
     h1,
@@ -84,6 +104,7 @@
       justify-content: space-between;
       padding: 18px 28px;
       border-bottom: 1px solid var(--line);
+      gap: 12px;
     }
 
     .brand {
@@ -109,6 +130,12 @@
       color: var(--ink);
     }
 
+    .header-right {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
     nav.tabs {
       display: flex;
       gap: 4px;
@@ -130,7 +157,105 @@
 
     nav.tabs button.active {
       background: var(--ink);
-      color: #fff;
+      color: var(--paper);
+    }
+
+    .icon-btn {
+      width: 36px;
+      height: 36px;
+      border-radius: 50%;
+      border: 1px solid var(--line);
+      background: var(--card);
+      color: var(--ink-soft);
+      font-size: 16px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+    }
+
+    .icon-btn:hover {
+      border-color: var(--ink);
+      color: var(--ink);
+    }
+
+    /* ---------- settings panel ---------- */
+    .settings-backdrop {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(14, 20, 32, .35);
+      z-index: 900;
+      align-items: flex-start;
+      justify-content: flex-end;
+    }
+
+    .settings-backdrop.open {
+      display: flex;
+    }
+
+    .settings-panel {
+      width: min(320px, 88vw);
+      background: var(--card);
+      border-left: 1px solid var(--line);
+      height: 100%;
+      padding: 22px;
+      box-shadow: -16px 0 40px -20px rgba(0, 0, 0, .4);
+    }
+
+    .settings-panel h3 {
+      font-size: 15px;
+      margin-bottom: 4px;
+    }
+
+    .settings-close {
+      float: right;
+      background: none;
+      border: none;
+      color: var(--ink-faint);
+      font-size: 18px;
+    }
+
+    .settings-group {
+      margin-top: 22px;
+    }
+
+    .settings-label {
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: .5px;
+      color: var(--ink-faint);
+      font-weight: 700;
+      margin-bottom: 8px;
+    }
+
+    .settings-options {
+      display: flex;
+      gap: 6px;
+      flex-wrap: wrap;
+    }
+
+    .settings-option {
+      border: 1px solid var(--line);
+      background: var(--paper);
+      color: var(--ink-soft);
+      padding: 8px 12px;
+      border-radius: 10px;
+      font-size: 12.5px;
+      font-weight: 700;
+    }
+
+    .settings-option.active {
+      background: var(--ink);
+      color: var(--paper);
+      border-color: var(--ink);
+    }
+
+    .settings-note {
+      margin-top: 24px;
+      font-size: 11.5px;
+      color: var(--ink-faint);
+      line-height: 1.5;
     }
 
     main {
@@ -225,6 +350,25 @@
       color: var(--ink-faint);
     }
 
+    .nearby-btn {
+      margin-top: 18px;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      background: var(--card);
+      border: 1px solid var(--line);
+      color: var(--ink);
+      padding: 10px 18px;
+      border-radius: 999px;
+      font-size: 13px;
+      font-weight: 700;
+    }
+
+    .nearby-btn:hover {
+      border-color: var(--sky);
+      color: var(--sky);
+    }
+
     .chips {
       display: flex;
       gap: 8px;
@@ -311,6 +455,10 @@
     .fc-phase.ground {
       background: #F1EFE9;
       color: var(--ink-soft);
+    }
+
+    :root[data-theme="dark"] .fc-phase.ground {
+      background: #232838;
     }
 
     .fc-phase.alert {
@@ -484,7 +632,7 @@
 
     .fc-btn.primary {
       background: var(--ink);
-      color: #fff;
+      color: var(--paper);
       border-color: var(--ink);
     }
 
@@ -511,6 +659,23 @@
       padding: 14px 16px;
     }
 
+    .fc-weather {
+      margin-top: 10px;
+      font-size: 12.5px;
+      color: var(--ink-soft);
+      display: flex;
+      gap: 6px;
+      flex-wrap: wrap;
+    }
+
+    .fc-weather .wx-chip {
+      background: var(--sky-soft);
+      color: var(--sky);
+      padding: 4px 10px;
+      border-radius: 999px;
+      font-weight: 700;
+    }
+
     .status-msg {
       max-width: 560px;
       margin: 24px auto 0;
@@ -528,6 +693,11 @@
       border-color: #F3D4CF;
       background: #FFF6F4;
       color: var(--alert);
+    }
+
+    :root[data-theme="dark"] .status-msg.error {
+      background: #2A1712;
+      border-color: #4A2A22;
     }
 
     /* ---------- tracked flights ---------- */
@@ -725,6 +895,21 @@
       flex-shrink: 0;
     }
 
+    .static-route-map {
+      margin-top: 16px;
+      border-radius: 16px;
+      overflow: hidden;
+      border: 1px solid var(--line);
+      background: var(--line);
+      height: 200px;
+      position: relative;
+    }
+
+    .static-route-map>div {
+      width: 100%;
+      height: 100%;
+    }
+
     /* ---------- explore (technical) tab ---------- */
     #view-explore {
       background: var(--radar-bg);
@@ -864,6 +1049,11 @@
         gap: 12px;
         align-items: flex-start;
       }
+
+      .header-right {
+        width: 100%;
+        justify-content: space-between;
+      }
     }
 
     .route-note {
@@ -918,11 +1108,46 @@
       <div class="brand-mark">✈</div>
       <h1>Overhead</h1>
     </div>
-    <nav class="tabs">
-      <button class="active" data-view="track">Track a flight</button>
-      <button data-view="explore">Explore live map</button>
-    </nav>
+    <div class="header-right">
+      <nav class="tabs">
+        <button class="active" data-view="track">Track a flight</button>
+        <button data-view="explore">Explore live map</button>
+      </nav>
+      <button class="icon-btn" id="settingsBtn" title="Preferences">⚙</button>
+    </div>
   </header>
+
+  <div class="settings-backdrop" id="settingsBackdrop">
+    <div class="settings-panel">
+      <button class="settings-close" id="settingsClose">✕</button>
+      <h3>Preferences</h3>
+      <div class="settings-group">
+        <div class="settings-label">Speed &amp; distance</div>
+        <div class="settings-options" id="unitOptions">
+          <button class="settings-option" data-unit="kmh">km/h · km</button>
+          <button class="settings-option" data-unit="mph">mph · mi</button>
+          <button class="settings-option" data-unit="kt">knots · nm</button>
+        </div>
+      </div>
+      <div class="settings-group">
+        <div class="settings-label">Appearance</div>
+        <div class="settings-options" id="themeOptions">
+          <button class="settings-option" data-theme="light">Light</button>
+          <button class="settings-option" data-theme="dark">Dark</button>
+          <button class="settings-option" data-theme="auto">Auto</button>
+        </div>
+      </div>
+      <div class="settings-group">
+        <div class="settings-label">Notifications</div>
+        <div class="settings-options" id="notifyOptions">
+          <button class="settings-option" id="notifyToggle" data-enabled="false">Off</button>
+        </div>
+        <div class="settings-note" style="margin-top:8px;">Alerts you in-browser when a tracked flight departs, lands,
+          or drops off the live feed. Needs this tab open (or in the background) and your browser's permission.</div>
+      </div>
+      <div class="settings-note">Saved on this device only — nothing is sent anywhere.</div>
+    </div>
+  </div>
 
   <main>
     <!-- ============ TRACK VIEW ============ -->
@@ -938,6 +1163,7 @@
         </div>
         <div class="search-hint" id="searchHint">Works best with an active flight number — try one of the live ones
           below 👇</div>
+        <div><button class="nearby-btn" id="nearbyBtn">📍 What's that plane above me?</button></div>
         <div class="chips" id="trendingChips"></div>
       </div>
 
@@ -972,13 +1198,14 @@
         <div class="explore-list" id="exploreList"></div>
       </div>
       <div class="explore-note">This is the raw radar view — aircraft broadcasting ADS-B near busy airports in the
-        selected region (sampled from a few 250 nm radius queries, so quiet areas can look empty). Click "Track a
-        flight" above for the friendly version.</div>
+        selected region (sampled from a few 250 nm radius queries, so quiet areas can look empty). This "live hub
+        radar" only lives here now — the flight cards on the Track tab no longer show it, just a plain map of that
+        one aircraft. Click "Track a flight" above for the friendly version.</div>
     </div>
   </main>
 
   <!-- <footer>
-    <span>Live position data: <a href="https://adsb.lol" target="_blank" rel="noopener">adsb.lol</a> community ADS-B network (ODbL). Scheduled and recently-landed status need an optional schedule API key (AeroDataBox) set on the server; without it, "not yet departed" is a best-effort inference.</span>
+    <span>Live position data: <a href="https://adsb.lol" target="_blank" rel="noopener">adsb.lol</a> community ADS-B network (ODbL). Aircraft photos: <a href="https://planespotters.net" target="_blank" rel="noopener">planespotters.net</a>. Weather: <a href="https://aviationweather.gov" target="_blank" rel="noopener">aviationweather.gov</a>. Scheduled and recently-landed status need an optional schedule API key (AeroDataBox) set on the server; without it, "not yet departed" is a best-effort inference.</span>
     <span>Relayed through server.py</span>
   </footer> -->
 
@@ -1172,6 +1399,16 @@
         const a = Math.sin(dLat / 2) ** 2 + Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLon / 2) ** 2;
         return 2 * R * Math.asin(Math.sqrt(a));
       }
+      function bearing(lat1, lon1, lat2, lon2) {
+        const φ1 = lat1 * Math.PI / 180, φ2 = lat2 * Math.PI / 180, Δλ = (lon2 - lon1) * Math.PI / 180;
+        const y = Math.sin(Δλ) * Math.cos(φ2);
+        const x = Math.cos(φ1) * Math.sin(φ2) - Math.sin(φ1) * Math.cos(φ2) * Math.cos(Δλ);
+        return (Math.atan2(y, x) * 180 / Math.PI + 360) % 360;
+      }
+      function compassPoint(deg) {
+        const dirs = ['N', 'NNE', 'NE', 'ENE', 'E', 'ESE', 'SE', 'SSE', 'S', 'SSW', 'SW', 'WSW', 'W', 'WNW', 'NW', 'NNW'];
+        return dirs[Math.round(deg / 22.5) % 16];
+      }
       function describeLocation(lat, lon) {
         let nearest = null, best = Infinity;
         AIRPORTS.forEach(([code, city, alat, alon]) => {
@@ -1205,6 +1442,85 @@
         const hrs = Math.floor(mins / 60);
         if (hrs < 24) return `${hrs}h ${mins % 60}m ago`;
         return `${Math.floor(hrs / 24)}d ago`;
+      }
+
+      // ============================================================
+      // PREFERENCES: units, theme, notifications (all localStorage-only)
+      // ============================================================
+      const DEFAULT_PREFS = { unit: 'kmh', theme: 'auto', notify: false };
+      function loadPrefs() {
+        try { return Object.assign({}, DEFAULT_PREFS, JSON.parse(localStorage.getItem('overhead_prefs') || '{}')); }
+        catch (e) { return Object.assign({}, DEFAULT_PREFS); }
+      }
+      let prefs = loadPrefs();
+      function savePrefs() { localStorage.setItem('overhead_prefs', JSON.stringify(prefs)); }
+
+      function applyTheme() {
+        const root = document.documentElement;
+        let mode = prefs.theme;
+        if (mode === 'auto') {
+          mode = (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) ? 'dark' : 'light';
+        }
+        root.setAttribute('data-theme', mode);
+      }
+      if (window.matchMedia) {
+        window.matchMedia('(prefers-color-scheme: dark)').addEventListener?.('change', () => { if (prefs.theme === 'auto') applyTheme(); });
+      }
+
+      // Speed: state vectors store m/s. Distance helpers take km. Both format
+      // according to the person's chosen unit rather than assuming km/h.
+      function fmtSpeed(mps) {
+        if (mps == null) return '—';
+        if (prefs.unit === 'mph') return Math.round(mps * 2.23694) + ' mph';
+        if (prefs.unit === 'kt') return Math.round(mps * 1.94384) + ' kt';
+        return Math.round(mps * 3.6) + ' km/h';
+      }
+      function fmtDistanceKm(km) {
+        if (km == null) return '—';
+        if (prefs.unit === 'mph') return Math.round(km * 0.621371).toLocaleString() + ' mi';
+        if (prefs.unit === 'kt') return Math.round(km * 0.539957).toLocaleString() + ' nm';
+        return Math.round(km).toLocaleString() + ' km';
+      }
+
+      function renderSettingsUI() {
+        document.querySelectorAll('#unitOptions [data-unit]').forEach(b => b.classList.toggle('active', b.dataset.unit === prefs.unit));
+        document.querySelectorAll('#themeOptions [data-theme]').forEach(b => b.classList.toggle('active', b.dataset.theme === prefs.theme));
+        const notifyBtn = document.getElementById('notifyToggle');
+        const on = prefs.notify && (typeof Notification === 'undefined' || Notification.permission === 'granted');
+        notifyBtn.textContent = on ? 'On' : 'Off';
+        notifyBtn.dataset.enabled = on ? 'true' : 'false';
+        notifyBtn.classList.toggle('active', on);
+      }
+
+      document.getElementById('settingsBtn').addEventListener('click', () => {
+        renderSettingsUI();
+        document.getElementById('settingsBackdrop').classList.add('open');
+      });
+      document.getElementById('settingsClose').addEventListener('click', () => document.getElementById('settingsBackdrop').classList.remove('open'));
+      document.getElementById('settingsBackdrop').addEventListener('click', (e) => { if (e.target.id === 'settingsBackdrop') e.currentTarget.classList.remove('open'); });
+      document.querySelectorAll('#unitOptions [data-unit]').forEach(btn => btn.addEventListener('click', () => {
+        prefs.unit = btn.dataset.unit; savePrefs(); renderSettingsUI();
+      }));
+      document.querySelectorAll('#themeOptions [data-theme]').forEach(btn => btn.addEventListener('click', () => {
+        prefs.theme = btn.dataset.theme; savePrefs(); applyTheme(); renderSettingsUI();
+      }));
+      document.getElementById('notifyToggle').addEventListener('click', async () => {
+        if (prefs.notify) {
+          prefs.notify = false; savePrefs(); renderSettingsUI(); return;
+        }
+        if (typeof Notification === 'undefined') {
+          alert("This browser doesn't support notifications.");
+          return;
+        }
+        const perm = await Notification.requestPermission();
+        prefs.notify = perm === 'granted';
+        savePrefs(); renderSettingsUI();
+      });
+      applyTheme();
+
+      function notifyFlight(title, body) {
+        if (!prefs.notify || typeof Notification === 'undefined' || Notification.permission !== 'granted') return;
+        try { new Notification(title, { body, icon: undefined, tag: title }); } catch (e) { /* best effort only */ }
       }
 
       // ============================================================
@@ -1264,6 +1580,10 @@
         const data = await getJson('/proxy/track?icao24=' + encodeURIComponent(icao24));
         return (data.states || []).filter(hasPosition)[0] || null;
       }
+      // A small bbox around a point, used for both "what's above me" and static route maps.
+      function bboxAround(lat, lon, degrees) {
+        return [lat - degrees, lon - degrees, lat + degrees, lon + degrees];
+      }
 
       // ---------- departure / destination ----------
       const routeCache = {};   // callsign -> route object or null (this browser session only)
@@ -1315,6 +1635,50 @@
         render(routeCache[callsign]);
       }
 
+      // Route lookup for a flight that ISN'T airborne (landed / scheduled cards).
+      // Same hexdb.io endpoint, no aircraft position to hand it, and it also draws
+      // a small static origin→destination map since there's no live position to
+      // put a plane icon on.
+      async function loadRouteStatic(holderId, mapHolderId, callsign) {
+        const holder = document.getElementById(holderId);
+        if (!holder || !callsign) return;
+        const render = (route) => {
+          const target = document.getElementById(holderId);
+          if (!target) return;
+          target.innerHTML = routeStripHtml(route);
+          renderStaticRouteMap(mapHolderId, route);
+        };
+        if (Object.prototype.hasOwnProperty.call(routeCache, callsign)) { render(routeCache[callsign]); return; }
+        holder.innerHTML = '<div class="route-note">Looking up departure and destination…</div>';
+        try {
+          const data = await getJson('/proxy/route?callsign=' + encodeURIComponent(callsign) + '&lat=0&lon=0');
+          if (data.status === 'ok' || data.status === 'none') routeCache[callsign] = data.route || null;
+        } catch (e) { /* enrichment only */ }
+        if (!Object.prototype.hasOwnProperty.call(routeCache, callsign)) {
+          const target = document.getElementById(holderId);
+          if (target) target.innerHTML = '<div class="route-note">Route lookup is unavailable right now.</div>';
+          return;
+        }
+        render(routeCache[callsign]);
+      }
+
+      function renderStaticRouteMap(mapHolderId, route) {
+        const el = document.getElementById(mapHolderId);
+        if (!el || typeof L === 'undefined') return;
+        if (!route || !route.origin || !route.destination || route.origin.lat == null || route.destination.lat == null) {
+          el.parentElement.style.display = 'none';
+          return;
+        }
+        el.parentElement.style.display = '';
+        const map = L.map(el, { zoomControl: false, scrollWheelZoom: false, doubleClickZoom: false, dragging: false, attributionControl: true });
+        L.tileLayer(TILE_URL, { maxZoom: 18, attribution: TILE_ATTRIBUTION }).addTo(map);
+        const o = [route.origin.lat, route.origin.lon], d = [route.destination.lat, route.destination.lon];
+        L.marker(o, { icon: routeDotIcon() }).addTo(map).bindTooltip(route.origin.city || route.origin.iata || 'Departure');
+        L.marker(d, { icon: routeDotIcon() }).addTo(map).bindTooltip(route.destination.city || route.destination.iata || 'Destination');
+        L.polyline([o, d], { color: '#3D63DD', weight: 2, opacity: .6, dashArray: '6 8' }).addTo(map);
+        map.fitBounds([o, d], { padding: [28, 28] });
+      }
+
       // ---------- flight progress: minutes flown / minutes to go ----------
       // Estimated from great-circle distance and current ground speed. Real routing,
       // wind, and the speed drop during descent all mean the true ETA can differ --
@@ -1341,7 +1705,7 @@
         <div class="progress-wrap">
           <div class="progress-bar"><div class="progress-fill" style="width:${p.pct}%"></div><div class="progress-plane" style="left:${p.pct}%">✈</div></div>
           <div class="progress-labels"><span>${fmtDuration(p.elapsedMin)} flown</span><span>${p.pct}% there</span><span>${fmtDuration(p.etaMin)} to go</span></div>
-          <div class="route-note">${p.flownKm.toLocaleString()} km flown · ${p.remainingKm.toLocaleString()} km remaining of ${p.totalKm.toLocaleString()} km total — estimated from great-circle distance and current speed, so treat it as a ballpark, not a boarding-pass ETA.</div>
+          <div class="route-note">${fmtDistanceKm(p.flownKm)} flown · ${fmtDistanceKm(p.remainingKm)} remaining of ${fmtDistanceKm(p.totalKm)} total — estimated from great-circle distance and current speed, so treat it as a ballpark, not a boarding-pass ETA.</div>
         </div>`;
       }
       function refreshProgress(holderId, callsign, s) {
@@ -1371,6 +1735,31 @@
         const code = s[18] || null, name = s[19] || null;
         if (name) return code ? `${name} (${code})` : name;
         return code || '—';
+      }
+
+      // ---------- weather (METAR, via the server proxy) ----------
+      const weatherCache = {}; // icao -> weather object or null (this browser session only)
+      async function loadWeather(icao) {
+        if (!icao) return null;
+        icao = icao.toUpperCase();
+        if (Object.prototype.hasOwnProperty.call(weatherCache, icao)) return weatherCache[icao];
+        try {
+          const data = await getJson('/proxy/weather?icao=' + encodeURIComponent(icao));
+          weatherCache[icao] = data.status === 'ok' ? data.weather : null;
+        } catch (e) { weatherCache[icao] = null; }
+        return weatherCache[icao];
+      }
+      function weatherPhrase(w) {
+        if (!w) return null;
+        const bits = [w.condition];
+        if (w.windKt != null && w.windKt >= 20) bits.push('strong wind');
+        return bits.filter(Boolean).join(', ');
+      }
+      function weatherChipHtml(w, label) {
+        if (!w) return '';
+        const wind = w.windKt != null ? `${Math.round(w.windKt)} kt wind` : '';
+        const temp = w.tempC != null ? `${Math.round(w.tempC)}°C` : '';
+        return `<span class="wx-chip">${escapeHtml(label)}: ${escapeHtml(w.condition)}${temp ? ' · ' + temp : ''}${wind ? ' · ' + wind : ''}</span>`;
       }
 
       // ============================================================
@@ -1448,7 +1837,7 @@
           Search again closer to departure and Overhead will pick it up the moment it's airborne.</div>`;
       }
 
-      function renderScheduledCard(flight, parsed) {
+      async function renderScheduledCard(flight, parsed) {
         const dep = airportLabel(flight.departureAirport);
         const arr = airportLabel(flight.arrivalAirport);
         const label = flight.statusLabel;
@@ -1465,18 +1854,29 @@
           </div>
           <div class="fc-phase scheduled"><span class="pulse"></span>${phaseText}</div>
         </div>
-        <p class="fc-story"><b>${parsed.iata}</b> hasn't taken off yet${flight.departureTime ? `, scheduled around <b>${fmtWhen(flight.departureTime)}</b>` : ''}.${storyExtra} Overhead will switch to live tracking automatically once it's airborne.</p>
+        <p class="fc-story" id="scheduledStory"><b>${parsed.iata}</b> hasn't taken off yet${flight.departureTime ? `, scheduled around <b>${fmtWhen(flight.departureTime)}</b>` : ''}.${storyExtra} Overhead will switch to live tracking automatically once it's airborne.</p>
+        <div id="scheduledWeather" class="fc-weather"></div>
         <div class="detail-route" style="margin-top:20px;">
           <div class="apt"><div class="code">${dep.code}</div><div class="city">${dep.city}</div></div>
           <div class="arrow">→</div>
           <div class="apt"><div class="code">${arr.code}</div><div class="city">${arr.city}</div></div>
         </div>
+        <div id="scheduledMapHolder" class="static-route-map"><div id="scheduledMap"></div></div>
         <div class="fc-actions"><button class="fc-btn primary" id="refreshBtn">↻ Check again</button></div>
       </div>`;
         document.getElementById('refreshBtn').onclick = () => runSearch(parsed.iata);
+        renderStaticRouteMap('scheduledMap', {
+          origin: { lat: dep.lat, lon: dep.lon, city: dep.city, iata: dep.code },
+          destination: { lat: arr.lat, lon: arr.lon, city: arr.city, iata: arr.code }
+        });
+        const [depW, arrW] = await Promise.all([loadWeather(flight.departureAirport), loadWeather(flight.arrivalAirport)]);
+        const wxHolder = document.getElementById('scheduledWeather');
+        if (wxHolder) wxHolder.innerHTML = weatherChipHtml(depW, 'Departure') + weatherChipHtml(arrW, 'Arrival');
+        const storyEl = document.getElementById('scheduledStory');
+        if (storyEl && depW) storyEl.innerHTML += ` Currently ${weatherPhrase(depW)} at ${escapeHtml(dep.city)}.`;
       }
 
-      function renderLandedCard(flight, parsed) {
+      async function renderLandedCard(flight, parsed) {
         const dep = airportLabel(flight.estDepartureAirport);
         const arr = airportLabel(flight.estArrivalAirport);
         const landedWhen = flight.lastSeen ? `${fmtWhen(flight.lastSeen)} (${timeAgo(flight.lastSeen)})` : 'recently';
@@ -1491,7 +1891,8 @@
           </div>
           <div class="fc-phase landed">Landed</div>
         </div>
-        <p class="fc-story"><b>${callsign}</b> looks to have <b>landed${arr.city !== 'unknown' ? ' at ' + arr.city : ''}</b>, last seen around <b>${landedWhen}</b>.</p>
+        <p class="fc-story" id="landedStory"><b>${callsign}</b> looks to have <b>landed${arr.city !== 'unknown' ? ' at ' + arr.city : ''}</b>, last seen around <b>${landedWhen}</b>.</p>
+        <div id="landedWeather" class="fc-weather"></div>
         <div class="detail-route">
           <div class="apt">
             <div class="code">${dep.code}</div><div class="city">${dep.city}</div>
@@ -1503,6 +1904,7 @@
             <div class="when">${flight.lastSeen ? fmtWhen(flight.lastSeen) : ''}</div>
           </div>
         </div>
+        <div id="landedMapHolder" class="static-route-map"><div id="landedMap"></div></div>
         <div class="fc-note">Based on a flight-schedule feed rather than live tracking — treat the landing time as approximate.</div>
         <div class="fc-actions">
           <button class="fc-btn primary" id="refreshBtn">↻ Check again</button>
@@ -1517,6 +1919,15 @@
             btn.textContent = 'Copied!'; setTimeout(() => btn.textContent = 'Copy status', 1500);
           });
         };
+        renderStaticRouteMap('landedMap', {
+          origin: { lat: dep.lat, lon: dep.lon, city: dep.city, iata: dep.code },
+          destination: { lat: arr.lat, lon: arr.lon, city: arr.city, iata: arr.code }
+        });
+        const arrW = await loadWeather(flight.estArrivalAirport);
+        const wxHolder = document.getElementById('landedWeather');
+        if (wxHolder && arrW) wxHolder.innerHTML = weatherChipHtml(arrW, 'Arrival now');
+        const storyEl = document.getElementById('landedStory');
+        if (storyEl && arrW) storyEl.innerHTML += ` It's currently ${weatherPhrase(arrW)} there.`;
       }
 
       function renderFlightCard(s, parsed) {
@@ -1526,8 +1937,6 @@
         const cls = classify(s);
         const lat = s[6], lon = s[5];
         const altFt = s[7] != null ? Math.round(s[7] * 3.28084 / 500) * 500 : null;
-        const kmh = s[9] != null ? Math.round(s[9] * 3.6) : null;
-        const mph = s[9] != null ? Math.round(s[9] * 2.23694) : null;
         const loc = describeLocation(lat, lon);
 
         const phaseLabel = { ground: 'On the ground', climb: 'Climbing', descend: 'Descending', cruise: 'Cruising' }[cls];
@@ -1538,7 +1947,7 @@
           story = `<b>${callsign}</b> is on the ground, ${loc}. It hasn't started climbing yet — could be taxiing, boarding, or just landed.`;
         } else {
           const verb = cls === 'climb' ? 'climbing through' : cls === 'descend' ? 'descending through' : 'cruising at';
-          story = `<b>${callsign}</b> is ${verb} <b>${altFt?.toLocaleString()} ft</b>, ${loc}, doing about <b>${kmh} km/h</b> (${mph} mph).`;
+          story = `<b>${callsign}</b> is ${verb} <b>${altFt?.toLocaleString()} ft</b>, ${loc}, doing about <b>${fmtSpeed(s[9])}</b>.`;
         }
 
         const flightKey = callsign;
@@ -1553,11 +1962,11 @@
           </div>
           <div class="fc-phase ${phaseClass}"><span class="pulse"></span>${phaseLabel}</div>
         </div>
-        <p class="fc-story">${story}</p>
+        <p class="fc-story" id="airborneStory">${story}</p>
         <div id="routeHolder"></div>
         <div class="fc-stats">
           <div class="fc-stat"><div class="label">Altitude</div><div class="val">${altFt != null ? altFt.toLocaleString() + ' ft' : '—'}</div></div>
-          <div class="fc-stat"><div class="label">Speed</div><div class="val">${kmh != null ? kmh + ' km/h' : '—'}</div></div>
+          <div class="fc-stat"><div class="label">Speed</div><div class="val">${fmtSpeed(s[9])}</div></div>
           <div class="fc-stat"><div class="label">Heading</div><div class="val">${s[10] != null ? Math.round(s[10]) + '°' : '—'}</div></div>
         </div>
         <div class="fc-mini-map"><div id="miniMap"></div></div>
@@ -1571,7 +1980,17 @@
       </div>
     `;
         renderMiniMap(lat, lon, s[10] || 0);
-        loadRoute('routeHolder', callsign, s);
+        loadRoute('routeHolder', callsign, s).then(() => {
+          const route = routeCache[callsign];
+          if (!route) return;
+          const arrIcao = route.destination && route.destination.icao;
+          if (!arrIcao) return;
+          loadWeather(arrIcao).then(w => {
+            if (!w) return;
+            const storyEl = document.getElementById('airborneStory');
+            if (storyEl) storyEl.innerHTML += ` Expect ${weatherPhrase(w)} on arrival at ${escapeHtml(route.destination.city || arrIcao)}.`;
+          });
+        });
         loadPhoto('photoHolder', s[0]);
 
         document.getElementById('detailBtn').onclick = () => openDetail(callsign, parsed, s);
@@ -1657,7 +2076,15 @@
         ).addTo(detailMap);
       }
 
-      // ---------- aircraft photo (planespotters.net, via the server proxy) ----------
+      // ---------- aircraft photo (planespotters.net) ----------
+      // Called straight from the browser -- NOT through server.py. planespotters.net's
+      // photo API checks the request's Origin/Referer header (which only a real
+      // browser navigation sets) and its terms of use don't allow proxying the call
+      // or rewriting the URLs it returns, so routing this through the server was both
+      // the bug (the server-side request had no browser Origin, so it got refused)
+      // and against their terms. This fetches the JSON directly and uses the
+      // thumbnail/link URLs exactly as given.
+      const PHOTO_API_URL = 'https://api.planespotters.net/pub/photos/hex';
       const photoCache = {}; // icao24 -> photo object or null (this browser session only)
       function photoBlockHtml(photo) {
         if (!photo || !photo.url) return '';
@@ -1669,13 +2096,22 @@
       async function loadPhoto(holderId, icao24) {
         const holder = document.getElementById(holderId);
         if (!holder || !icao24) return;
+        icao24 = icao24.toLowerCase();
         if (Object.prototype.hasOwnProperty.call(photoCache, icao24)) {
           holder.innerHTML = photoBlockHtml(photoCache[icao24]);
           return;
         }
         try {
-          const data = await getJson('/proxy/photo?icao24=' + encodeURIComponent(icao24));
-          const photo = data.status === 'ok' ? data.photo : null;
+          const res = await fetch(PHOTO_API_URL + '/' + encodeURIComponent(icao24));
+          if (!res.ok) throw new Error('HTTP ' + res.status);
+          const data = await res.json();
+          const photos = (data && data.photos) || [];
+          let photo = null;
+          if (photos.length) {
+            const p0 = photos[0];
+            const thumb = p0.thumbnail_large || p0.thumbnail || {};
+            photo = { url: thumb.src, photographer: p0.photographer, link: p0.link };
+          }
           photoCache[icao24] = photo;
           const target = document.getElementById(holderId);
           if (target) target.innerHTML = photoBlockHtml(photo);
@@ -1711,6 +2147,76 @@
         }
       }
 
+      // ---------- "what's that plane above me?" (geolocation) ----------
+      const nearbyBtn = document.getElementById('nearbyBtn');
+      nearbyBtn.addEventListener('click', () => {
+        if (!navigator.geolocation) {
+          resultWrap.innerHTML = '<div class="status-msg error">This browser doesn\'t support location lookup.</div>';
+          window.scrollTo({ top: resultWrap.offsetTop - 20, behavior: 'smooth' });
+          return;
+        }
+        nearbyBtn.disabled = true;
+        const originalLabel = nearbyBtn.textContent;
+        nearbyBtn.textContent = 'Finding your location…';
+        resultWrap.innerHTML = '<div class="status-msg">Looking for your location, then scanning the sky above it…</div>';
+        window.scrollTo({ top: resultWrap.offsetTop - 20, behavior: 'smooth' });
+        navigator.geolocation.getCurrentPosition(async (pos) => {
+          const { latitude: myLat, longitude: myLon } = pos.coords;
+          try {
+            const states = await fetchStates(bboxAround(myLat, myLon, 1.2), null);
+            if (!states.length) {
+              resultWrap.innerHTML = `<div class="status-msg">Nothing broadcasting ADS-B directly overhead right now — try again in a minute, or it may just be a quiet patch of sky.</div>`;
+            } else {
+              states.forEach(s => { s._distKm = haversine(myLat, myLon, s[6], s[5]); });
+              states.sort((a, b) => a._distKm - b._distKm);
+              renderNearbyCard(states.slice(0, 5), myLat, myLon);
+            }
+          } catch (e) {
+            resultWrap.innerHTML = `<div class="status-msg error">Couldn't check the sky above you right now. Try again shortly.</div>`;
+          }
+          nearbyBtn.disabled = false; nearbyBtn.textContent = originalLabel;
+        }, (err) => {
+          resultWrap.innerHTML = `<div class="status-msg error">Couldn't get your location (${escapeHtml(err.message || 'permission denied')}). You can allow location access and try again, or just search a flight number instead.</div>`;
+          nearbyBtn.disabled = false; nearbyBtn.textContent = originalLabel;
+        }, { enableHighAccuracy: false, timeout: 10000, maximumAge: 60000 });
+      });
+
+      function renderNearbyCard(states, myLat, myLon) {
+        const top = states[0];
+        const callsign = (top[1] || '').trim() || top[0].toUpperCase();
+        const airlineName = ICAO_TO_NAME[callsign.slice(0, 3)] || 'Unknown operator';
+        const altFt = top[7] != null ? Math.round(top[7] * 3.28084 / 100) * 100 : null;
+        const dir = compassPoint(bearing(myLat, myLon, top[6], top[5]));
+        const others = states.slice(1).map(s => {
+          const cs = (s[1] || '').trim() || s[0].toUpperCase();
+          const alt = s[7] != null ? Math.round(s[7] * 3.28084).toLocaleString() + ' ft' : '—';
+          return `<div class="tracked-row" data-nearby="${escapeHtml(s[0])}"><div class="tr-left"><div><div class="tr-flight">${escapeHtml(cs)}</div><div class="tr-status">${alt}, ${fmtDistanceKm(s._distKm)} away</div></div></div></div>`;
+        }).join('');
+        resultWrap.innerHTML = `
+      <div class="flight-card">
+        <div class="fc-top">
+          <div><div class="fc-airline">${escapeHtml(airlineName)}</div><div class="fc-flightno">${escapeHtml(callsign)}</div></div>
+          <div class="fc-phase"><span class="pulse"></span>Closest overhead</div>
+        </div>
+        <p class="fc-story"><b>${escapeHtml(callsign)}</b> is the closest aircraft to you right now — about <b>${fmtDistanceKm(top._distKm)}</b> away, to the <b>${dir}</b>, at roughly <b>${altFt != null ? altFt.toLocaleString() + ' ft' : 'unknown altitude'}</b>.</p>
+        <div class="fc-mini-map"><div id="nearbyMap"></div></div>
+        <div class="fc-actions"><button class="fc-btn primary" id="nearbyDetailBtn">Full details & live map →</button></div>
+        ${others.length ? `<h3 style="margin-top:22px;font-size:13px;color:var(--ink-soft);text-transform:uppercase;letter-spacing:.4px;">Also nearby</h3>${others}` : ''}
+      </div>`;
+        renderMiniMap(top[6], top[5], top[10] || 0);
+        const el = document.getElementById('nearbyMap');
+        if (el && miniMap) L.marker([myLat, myLon]).addTo(miniMap).bindTooltip('You');
+        document.getElementById('nearbyDetailBtn').onclick = () => openDetail(callsign, parseQuery(callsign), top);
+        resultWrap.querySelectorAll('[data-nearby]').forEach(row => {
+          row.onclick = () => {
+            const s = states.find(x => x[0] === row.dataset.nearby);
+            if (!s) return;
+            const cs = (s[1] || '').trim() || s[0].toUpperCase();
+            openDetail(cs, parseQuery(cs), s);
+          };
+        });
+      }
+
       // ---------- tracked flights (localStorage) ----------
       function getTracked() { try { return JSON.parse(localStorage.getItem('overhead_tracked') || '[]'); } catch (e) { return []; } }
       function setTracked(arr) { localStorage.setItem('overhead_tracked', JSON.stringify(arr)); }
@@ -1719,6 +2225,11 @@
         if (t.includes(key)) t = t.filter(k => k !== key); else t.push(key);
         setTracked(t);
       }
+      // Last known phase per tracked flight, used only to fire a notification when
+      // it changes (e.g. "was airborne, now not found" => probably landed).
+      function getTrackedPhases() { try { return JSON.parse(localStorage.getItem('overhead_tracked_phases') || '{}'); } catch (e) { return {}; } }
+      function setTrackedPhases(obj) { localStorage.setItem('overhead_tracked_phases', JSON.stringify(obj)); }
+
       async function renderTrackedList() {
         const tracked = getTracked();
         if (tracked.length === 0) {
@@ -1735,7 +2246,11 @@
       </div>
     `).join('');
         trackedList.querySelectorAll('[data-remove]').forEach(btn => {
-          btn.onclick = () => { toggleTracked(btn.dataset.remove); renderTrackedList(); };
+          btn.onclick = () => {
+            toggleTracked(btn.dataset.remove);
+            const phases = getTrackedPhases(); delete phases[btn.dataset.remove]; setTrackedPhases(phases);
+            renderTrackedList();
+          };
         });
         trackedList.querySelectorAll('[data-check]').forEach(btn => {
           btn.onclick = () => {
@@ -1758,20 +2273,31 @@
         const trackedLiveCache = renderTrackedList._cache || (renderTrackedList._cache = {});
         try {
           const states = await fetchTrackedStates(tracked);
+          const phases = getTrackedPhases();
+          let phasesChanged = false;
           tracked.forEach(k => {
             const match = states.find(s => (s[1] || '').trim().toUpperCase() === k.toUpperCase());
             const row = trackedList.querySelector(`[data-key="${k}"] .tr-status`);
-            if (!row) return;
+            const prevPhase = phases[k];
             if (!match) {
               delete trackedLiveCache[k];
-              row.textContent = 'not currently in the air — tap "Full check" for landed/pre-departure status';
+              if (row) row.textContent = 'not currently in the air — tap "Full check" for landed/pre-departure status';
+              if (prevPhase && prevPhase !== 'not_airborne') {
+                notifyFlight(`${k} is no longer live`, 'It may have landed, or it just hasn\'t departed yet — tap "Full check" in Overhead.');
+              }
+              phases[k] = 'not_airborne'; phasesChanged = true;
               return;
             }
             trackedLiveCache[k] = match;
             const cls = classify(match);
             const loc = describeLocation(match[6], match[5]);
-            row.textContent = cls === 'ground' ? `on the ground, ${loc}` : `${{ climb: 'climbing', descend: 'descending', cruise: 'cruising' }[cls]}, ${loc}`;
+            if (row) row.textContent = cls === 'ground' ? `on the ground, ${loc}` : `${{ climb: 'climbing', descend: 'descending', cruise: 'cruising' }[cls]}, ${loc}`;
+            if (prevPhase === 'not_airborne') {
+              notifyFlight(`${k} is airborne`, `Now ${cls === 'ground' ? 'on the ground' : 'flying'}, ${loc}.`);
+            }
+            phases[k] = 'airborne'; phasesChanged = true;
           });
+          if (phasesChanged) setTrackedPhases(phases);
           bgOk();
         } catch (e) {
           if (e instanceof RateLimitError) {
@@ -1829,9 +2355,6 @@
         const isSaved = getTracked().includes(callsign);
         const altFt = s[7] != null ? Math.round(s[7] * 3.28084) : null;
         const altM = s[7] != null ? Math.round(s[7]) : null;
-        const kmh = s[9] != null ? Math.round(s[9] * 3.6) : null;
-        const mph = s[9] != null ? Math.round(s[9] * 2.23694) : null;
-        const kts = s[9] != null ? Math.round(s[9] * 1.94384) : null;
         const vr = s[11];
         const vrFtMin = vr != null ? Math.round(vr * 196.85) : null;
 
@@ -1854,8 +2377,7 @@
         <div class="detail-grid">
           <div class="fc-stat"><div class="label">Altitude</div><div class="val">${altFt != null ? altFt.toLocaleString() + ' ft' : '—'}</div></div>
           <div class="fc-stat"><div class="label">Altitude (m)</div><div class="val">${altM != null ? altM.toLocaleString() + ' m' : '—'}</div></div>
-          <div class="fc-stat"><div class="label">Ground speed</div><div class="val">${kmh != null ? kmh + ' km/h' : '—'}</div></div>
-          <div class="fc-stat"><div class="label">Speed (kt / mph)</div><div class="val">${kts != null ? kts + ' kt' : '—'}${mph != null ? ' / ' + mph + ' mph' : ''}</div></div>
+          <div class="fc-stat"><div class="label">Ground speed</div><div class="val">${fmtSpeed(s[9])}</div></div>
           <div class="fc-stat"><div class="label">Heading</div><div class="val">${s[10] != null ? Math.round(s[10]) + '°' : '—'}</div></div>
           <div class="fc-stat"><div class="label">Vertical rate</div><div class="val">${vrFtMin != null ? (vrFtMin > 0 ? '+' : '') + vrFtMin.toLocaleString() + ' ft/min' : '—'}</div></div>
           <div class="fc-stat"><div class="label">Squawk</div><div class="val">${s[14] || '—'}</div><div class="route-note" style="margin-top:4px;">${squawkNote(s[14])}</div></div>
@@ -1885,7 +2407,6 @@
         const cls = classify(s);
         const lat = s[6], lon = s[5];
         const altFt = s[7] != null ? Math.round(s[7] * 3.28084 / 500) * 500 : null;
-        const kmh = s[9] != null ? Math.round(s[9] * 3.6) : null;
         const loc = describeLocation(lat, lon);
         const storyEl = document.getElementById('detailStory');
         if (storyEl) {
@@ -1893,7 +2414,7 @@
             storyEl.innerHTML = `<b>${callsign}</b> is on the ground, ${loc}.`;
           } else {
             const verb = cls === 'climb' ? 'climbing through' : cls === 'descend' ? 'descending through' : 'cruising at';
-            storyEl.innerHTML = `<b>${callsign}</b> is ${verb} <b>${altFt?.toLocaleString()} ft</b>, ${loc}, doing about <b>${kmh} km/h</b>.`;
+            storyEl.innerHTML = `<b>${callsign}</b> is ${verb} <b>${altFt?.toLocaleString()} ft</b>, ${loc}, doing about <b>${fmtSpeed(s[9])}</b>.`;
           }
         }
         detailTrail.push([lat, lon]);
@@ -1940,7 +2461,9 @@
       });
 
       // ============================================================
-      // EXPLORE VIEW (technical radar — mostly unchanged from before)
+      // EXPLORE VIEW (technical radar — the ONLY place the "busy hubs"
+      // sampling map appears; flight cards on the Track tab use their own
+      // small live/static maps instead, never this one)
       // ============================================================
       const REGIONS = {
         world: null, na: [14, -170, 75, -50], eu: [34, -12, 71, 40], asia: [0, 95, 50, 150]
@@ -2051,6 +2574,7 @@
       // ============================================================
       // BOOT
       // ============================================================
+      renderSettingsUI();
       loadTrending();
       renderTrackedList();
       (function scheduleTrackedRefresh() {
